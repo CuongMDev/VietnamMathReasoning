@@ -61,7 +61,7 @@ def generate_answers(prompts, max_new_tokens=512):
     texts = [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
     return texts
 
-# 📊 Đánh giá accuracy và lưu chi tiết
+# 📊 Đánh giá accuracy và lưu chi tiết (kèm output đầy đủ)
 def evaluate_dataset(dataset_name, use_local_data=False, eval_size=0, problem="problem", answer="answer", split="test"):
     if use_local_data:
         dataset = load_dataset("json", data_files=dataset_name)[split]
@@ -78,7 +78,8 @@ def evaluate_dataset(dataset_name, use_local_data=False, eval_size=0, problem="p
     detail_file = RESULT_FILE.replace(".csv", f"_{os.path.basename(dataset_name).replace('.json','')}_details.csv")
     with open(detail_file, "w", newline="", encoding="utf-8") as f_detail:
         writer = csv.writer(f_detail)
-        writer.writerow(["question", "ground_truth", "prediction", "is_correct"])
+        # ➕ Thêm cột raw_output
+        writer.writerow(["question", "ground_truth", "prediction", "raw_output", "is_correct"])
 
         progress_bar = tqdm(range(0, total, BATCH_SIZE), desc=f"Evaluating {dataset_name}")
         for i in progress_bar:
@@ -93,6 +94,7 @@ def evaluate_dataset(dataset_name, use_local_data=False, eval_size=0, problem="p
                 question = sample[problem]
                 gt = str(sample[answer]).strip()
                 pred = extract_boxed(output)
+                raw_output = output.strip()  # ✨ Lưu toàn bộ kết quả sinh ra
 
                 # So sánh kết quả
                 is_correct = False
@@ -107,7 +109,7 @@ def evaluate_dataset(dataset_name, use_local_data=False, eval_size=0, problem="p
                     correct += 1
 
                 # Ghi từng dòng vào file chi tiết
-                writer.writerow([question, gt, pred, int(is_correct)])
+                writer.writerow([question, gt, pred, raw_output, int(is_correct)])
 
             current_acc = correct / (i + len(batch_samples)) * 100
             progress_bar.set_postfix(correct=correct, acc=f"{current_acc:.2f}%")

@@ -1,13 +1,17 @@
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, BitsAndBytesConfig
-from transformers import DataCollatorForLanguageModeling
 from peft import LoraConfig, get_peft_model, TaskType
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, BitsAndBytesConfig, \
+    DataCollatorForSeq2Seq
+from transformers.trainer_pt_utils import LabelSmoother
+
 from config import MODEL_NAME, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, PROMPT_TEMPLATE
+
+IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
 # --- Cấu hình ---
 OUTPUT_DIR = "./sft-lora-model"
-MAX_LENGTH = 768
-LR = 2e-5
+MAX_LENGTH = 1024
+LR = 3e-5
 BATCH_SIZE = 2
 EPOCHS = 1
 
@@ -21,14 +25,15 @@ bnb_config = BitsAndBytesConfig(load_in_8bit=True)
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
     quantization_config=bnb_config,  # tiết kiệm VRAM
+    attn_implementation="flash_attention_2",
     cache_dir=MODEL_CACHE_PATH
 )
 
 # --- Thiết lập LoRA ---
 lora_config = LoraConfig(
-    r=16,                # rank của LoRA
+    r=32,                # rank của LoRA
     lora_alpha=32,       # scaling
-    target_modules=["q_proj", "v_proj"],  # tuỳ model
+    target_modules=["q_proj", "v_proj", "up_proj", "down_proj", "gate_proj", "o_proj"],  # tuỳ model
     lora_dropout=0.05,
     bias="none",
     task_type=TaskType.CAUSAL_LM
@@ -49,38 +54,31 @@ def format_example(example):
     answer = example['response']
 
     # Tokenize riêng instruction và answer
-    tokenized_instruction = tokenizer(instruction, truncation=True, max_length=MAX_LENGTH)
+    tokenized_instruction = tokenizer(instruction, truncation=True, max_length=MAX_LENGTH, add_special_tokens=False)
     tokenized_answer = tokenizer(answer, truncation=True, max_length=MAX_LENGTH, add_special_tokens=False)
 
     # Ghép lại
     input_ids = tokenized_instruction["input_ids"] + tokenized_answer["input_ids"]
-    attention_mask = [1] * len(input_ids)
 
-    # Mask phần instruction (đặt -100 để loss không tính)
-    labels = [-100] * len(tokenized_instruction["input_ids"]) + tokenized_answer["input_ids"]
+    labels = [IGNORE_TOKEN_ID] * len(tokenized_instruction["input_ids"]) + tokenized_answer["input_ids"]
+
+    # ✳️ (1) Thêm <eos> cuối nếu model có eos_token
+    if tokenizer.eos_token_id is not None:
+        input_ids.append(tokenizer.eos_token_id)
+        labels.append(tokenizer.eos_token_id)
 
     # Cắt/pad đến MAX_LENGTH
     if len(input_ids) > MAX_LENGTH:
         input_ids = input_ids[:MAX_LENGTH]
-        attention_mask = attention_mask[:MAX_LENGTH]
         labels = labels[:MAX_LENGTH]
-    else:
-        pad_len = MAX_LENGTH - len(input_ids)
-        input_ids += [tokenizer.pad_token_id] * pad_len
-        attention_mask += [0] * pad_len
-        labels += [-100] * pad_len
 
     return {
         "input_ids": input_ids,
-        "attention_mask": attention_mask,
         "labels": labels,
     }
 
 train_tokenized_dataset = train_dataset.map(format_example, remove_columns=train_dataset.column_names)
 val_tokenized_dataset = val_dataset.map(format_example, remove_columns=val_dataset.column_names)
-
-# --- Data collator ---
-collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
 
 # --- Training arguments ---
 training_args = TrainingArguments(
@@ -89,19 +87,29 @@ training_args = TrainingArguments(
     per_device_train_batch_size=BATCH_SIZE,
     learning_rate=LR,
     fp16=True,
-    gradient_accumulation_steps=4,
-    logging_steps=2,
+    gradient_accumulation_steps=8,
+    logging_steps=10,
     eval_strategy="steps",   # ✅ thêm dòng này để Trainer chạy eval
-    eval_steps=20,             # ✅ mỗi 50 bước đánh giá
-    save_steps=20,             # ✅ lưu cùng lúc
+    eval_steps=80,             # ✅ mỗi 50 bước đánh giá
+    save_steps=80,             # ✅ lưu cùng lúc
     save_total_limit=2,
     report_to="tensorboard",
     logging_dir="./logs",
-    optim="paged_adamw_8bit",
     warmup_ratio=0.03,
     lr_scheduler_type="cosine",
+    optim="adamw_torch_fused",
+    adam_beta2=0.999,
     load_best_model_at_end=True,
     label_names=["labels"]
+)
+
+# Thêm Data Collator
+data_collator = DataCollatorForSeq2Seq(
+    tokenizer=tokenizer,
+    model=model,
+    label_pad_token_id=IGNORE_TOKEN_ID, # Rất quan trọng!
+    padding="longest",
+    pad_to_multiple_of=8 # Tùy chọn, giúp tối ưu hóa trên GPU tensor core
 )
 
 trainer = Trainer(
@@ -109,11 +117,12 @@ trainer = Trainer(
     args=training_args,
     train_dataset=train_tokenized_dataset,
     eval_dataset=val_tokenized_dataset,   # ✅ thêm tập validation
-    data_collator=collator,
+    data_collator=data_collator,
 )
 
 # --- Train ---
 trainer.train()
+trainer.evaluate()
 
 # --- Lưu model LoRA ---
 model.save_pretrained(OUTPUT_DIR)
