@@ -24,6 +24,7 @@ def add_dataset(
     subset=None,
     split="train",
     n_samples=0,
+    min_length=0,
     max_length=512,
 ):
     """
@@ -63,9 +64,9 @@ def add_dataset(
         # a = "\n".join(lines)
 
         # Tạo text kết hợp instruction + output để check độ dài token
-        text = PROMPT_TEMPLATE.format(question='q') + a
+        text = PROMPT_TEMPLATE.format(question=q) + a + tokenizer.eos_token
         tokens = tokenizer(text, truncation=False)
-        if len(tokens["input_ids"]) > max_length:
+        if len(tokens["input_ids"]) < min_length or len(tokens["input_ids"]) > max_length:
             continue
 
         data = {
