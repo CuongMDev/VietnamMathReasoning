@@ -1,24 +1,29 @@
 import csv
+import os
 import re
+from datetime import datetime
+
+import torch
 from datasets import load_dataset
 from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-import torch
 from tqdm import tqdm
-from datetime import datetime
-import os
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from config import MODEL_NAME, RESULT_FILE, DEVICE, MODEL_CACHE_PATH, DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, \
-    PROMPT_TEMPLATE
+from config import RESULT_FILE, DEVICE, MODEL_CACHE_PATH, DATA_CACHE_PATH, CFG
+from utils import make_prompt_template
+
+MODEL_NAME = CFG["model"]["name"]
 
 # 🧠 Tải model và tokenizer
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
 tokenizer.padding_side = "left"
-bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+# --- Load model ---
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
-    cache_dir=MODEL_CACHE_PATH,
-    quantization_config=bnb_config,
+    torch_dtype=torch.float16,  # tiết kiệm VRAM
+    device_map='cuda',
+    attn_implementation="flash_attention_2",
+    cache_dir=MODEL_CACHE_PATH
 )
 model = PeftModel.from_pretrained(model, "sft-lora-model")
 model.generation_config.pad_token_id = tokenizer.eos_token_id
@@ -28,7 +33,7 @@ BATCH_SIZE = 8
 
 # 🔢 Hàm trích xuất kết quả trong \boxed{...}
 def extract_boxed(s: str):
-    start = s.find(r"\boxed{")
+    start = s.rfind(r"\boxed{")
     if start != -1:
         start += len(r"\boxed{")
         depth = 1
@@ -53,9 +58,19 @@ def extract_boxed(s: str):
 
 
 # ⚙️ Hàm sinh câu trả lời
-def generate_answers(prompts, max_new_tokens=512):
-    # prompts: list of str
-    inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(DEVICE)
+def generate_answers(messages, max_new_tokens=512):
+    texts = []
+    for message in messages:
+        text = tokenizer.apply_chat_template(
+            message,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=False,
+        )
+        texts.append(text)
+
+    # messages: list of message
+    inputs = tokenizer(texts, return_tensors="pt", padding=True).to(DEVICE)
     with torch.no_grad():
         outputs = model.generate(**inputs, max_new_tokens=max_new_tokens)
     texts = [tokenizer.decode(output, skip_special_tokens=True) for output in outputs]
@@ -85,10 +100,10 @@ def evaluate_dataset(dataset_name, use_local_data=False, eval_size=0, problem="p
         for i in progress_bar:
             batch_indices = list(range(i, min(i + BATCH_SIZE, total)))
             batch_samples = dataset.select(batch_indices)
-            batch_questions = [PROMPT_TEMPLATE.format(question=s[problem]) for s in batch_samples]
+            batch_questions = [make_prompt_template(s[problem]) for s in batch_samples]
 
             # Batch inference
-            batch_outputs = generate_answers(batch_questions, max_new_tokens=3584)
+            batch_outputs = generate_answers(batch_questions, max_new_tokens=5000)
 
             for sample, output in zip(batch_samples, batch_outputs):
                 question = sample[problem]

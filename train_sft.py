@@ -1,80 +1,95 @@
+import random
+
+import torch
 from datasets import load_dataset
-from peft import LoraConfig, get_peft_model, TaskType
-from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, BitsAndBytesConfig, \
-    DataCollatorForSeq2Seq
+from peft import LoraConfig, TaskType, get_peft_model
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainingArguments, Trainer, DataCollatorForSeq2Seq
 from transformers.trainer_pt_utils import LabelSmoother
 
-from config import MODEL_NAME, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, PROMPT_TEMPLATE
+from config import INSTRUCTION_DATA_PATH, CFG, MODEL_CACHE_PATH
+from utils import find_sublist_indices, make_prompt_template
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
+random.seed(42)
 
 # --- Cấu hình ---
-OUTPUT_DIR = "./sft-lora-model"
-MAX_LENGTH = 1024
-LR = 3e-5
-BATCH_SIZE = 2
-EPOCHS = 1
+# Ví dụ: lấy các giá trị
+MODEL_NAME: str = str(CFG["model"]["name"])
+
+OUTPUT_DIR: str = str(CFG["training"]["output_dir"])
+LR: float = float(CFG["training"]["learning_rate"])
+BATCH_SIZE: int = int(CFG["training"]["batch_size"])
+EPOCHS: int = int(CFG["training"]["epochs"])
+
+LORA_CONFIG: dict = dict(CFG["lora"])
+TRAIN_PATH: str = str(CFG["dataset"]["train_path"])
+VAL_RATIO: float = float(CFG["dataset"]["val_ratio"])
 
 # --- Load tokenizer ---
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
+tokenizer.padding_side = 'left'
 
-# --- Load model 8-bit ---
-bnb_config = BitsAndBytesConfig(load_in_8bit=True)
+# --- Load model ---
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_NAME,
-    quantization_config=bnb_config,  # tiết kiệm VRAM
+    torch_dtype=torch.bfloat16,  # tiết kiệm VRAM
+    device_map='cuda',
     attn_implementation="flash_attention_2",
-    cache_dir=MODEL_CACHE_PATH
+    cache_dir=MODEL_CACHE_PATH,
 )
 
 # --- Thiết lập LoRA ---
-lora_config = LoraConfig(
-    r=32,                # rank của LoRA
-    lora_alpha=32,       # scaling
-    target_modules=["q_proj", "v_proj", "up_proj", "down_proj", "gate_proj", "o_proj"],  # tuỳ model
-    lora_dropout=0.05,
-    bias="none",
-    task_type=TaskType.CAUSAL_LM
-)
+if bool(LORA_CONFIG["using_lora"]):
+    lora_config = LoraConfig(
+        r=LORA_CONFIG["r"],
+        lora_alpha=LORA_CONFIG["lora_alpha"],
+        target_modules=LORA_CONFIG["target_modules"],
+        lora_dropout=LORA_CONFIG["lora_dropout"],
+        bias=LORA_CONFIG["bias"],
+        task_type=TaskType.CAUSAL_LM
+    )
 
-model = get_peft_model(model, lora_config)
-model.print_trainable_parameters()
+    model = get_peft_model(model, lora_config)
+    model.print_trainable_parameters()
 
 # --- Load dataset ---
 dataset = load_dataset("json", data_files=INSTRUCTION_DATA_PATH+"train.json")["train"]
-dataset_split = dataset.train_test_split(test_size=0.01, seed=42)
+dataset_split = dataset.train_test_split(test_size=VAL_RATIO, seed=42)
 train_dataset = dataset_split["train"]
 val_dataset = dataset_split["test"]
 
 def format_example(example):
-    # Tạo text đầy đủ
-    instruction = PROMPT_TEMPLATE.format(question=example['instruction'])
-    answer = example['response']
+    think = example.get('think')
+    messages = make_prompt_template(example['instruction'], think=think, respond=example['response'])
 
-    # Tokenize riêng instruction và answer
-    tokenized_instruction = tokenizer(instruction, truncation=True, max_length=MAX_LENGTH, add_special_tokens=False)
-    tokenized_answer = tokenizer(answer, truncation=True, max_length=MAX_LENGTH, add_special_tokens=False)
+    # --- 2️⃣ Tạo prompt string từ messages ---
+    # add_generation_prompt=False vì response đã có sẵn, reasoning ẩn nếu enable_thinking=True
+    prompt_text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+    )
 
-    # Ghép lại
-    input_ids = tokenized_instruction["input_ids"] + tokenized_answer["input_ids"]
+    # --- 3️⃣ Tokenize toàn bộ prompt ---
+    tokenized = tokenizer(prompt_text, truncation=False, add_special_tokens=False)
+    input_ids = tokenized["input_ids"]
 
-    labels = [IGNORE_TOKEN_ID] * len(tokenized_instruction["input_ids"]) + tokenized_answer["input_ids"]
+    if think is None:
+        end_masking_token = "</think>"
+    else:
+        end_masking_token = "<think>"
 
-    # ✳️ (1) Thêm <eos> cuối nếu model có eos_token
-    if tokenizer.eos_token_id is not None:
-        input_ids.append(tokenizer.eos_token_id)
-        labels.append(tokenizer.eos_token_id)
+    # --- 4️⃣ Tìm vị trí end_masking_token ---
+    masking_end_ids = tokenizer(end_masking_token, add_special_tokens=False)["input_ids"]
 
-    # Cắt/pad đến MAX_LENGTH
-    if len(input_ids) > MAX_LENGTH:
-        input_ids = input_ids[:MAX_LENGTH]
-        labels = labels[:MAX_LENGTH]
+    end_pos = find_sublist_indices(input_ids, masking_end_ids)
+    # mask toàn bộ trước end_masking_token (kể cả prefix)
+    labels = [IGNORE_TOKEN_ID] * end_pos + input_ids[end_pos:]
 
     return {
         "input_ids": input_ids,
-        "labels": labels,
+        "labels": labels
     }
 
 train_tokenized_dataset = train_dataset.map(format_example, remove_columns=train_dataset.column_names)
@@ -85,20 +100,21 @@ training_args = TrainingArguments(
     output_dir=OUTPUT_DIR,
     num_train_epochs=EPOCHS,
     per_device_train_batch_size=BATCH_SIZE,
+    per_device_eval_batch_size=2*BATCH_SIZE,
     learning_rate=LR,
-    fp16=True,
-    gradient_accumulation_steps=8,
-    logging_steps=10,
-    eval_strategy="steps",   # ✅ thêm dòng này để Trainer chạy eval
-    eval_steps=80,             # ✅ mỗi 50 bước đánh giá
-    save_steps=80,             # ✅ lưu cùng lúc
-    save_total_limit=2,
+    weight_decay=CFG["training"]["weight_decay"],
+    bf16=True,
+    tf32=True,
+    gradient_accumulation_steps=CFG["training"]["gradient_accumulation_steps"],
+    logging_steps=CFG["training"]["logging_steps"],
+    eval_strategy="steps",
+    eval_steps=CFG["training"]["eval_steps"],
+    save_steps=CFG["training"]["save_steps"],
+    save_total_limit=CFG["training"]["save_total_limit"],
     report_to="tensorboard",
     logging_dir="./logs",
-    warmup_ratio=0.03,
-    lr_scheduler_type="cosine",
-    optim="adamw_torch_fused",
-    adam_beta2=0.999,
+    lr_scheduler_type=CFG["training"]["lr_scheduler_type"],
+    warmup_ratio=CFG["training"]["warmup_ratio"],
     load_best_model_at_end=True,
     label_names=["labels"]
 )

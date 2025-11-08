@@ -5,9 +5,12 @@ import json
 
 from transformers import AutoTokenizer
 
-from config import DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, MODEL_NAME, MODEL_CACHE_PATH, PROMPT_TEMPLATE
+from config import DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, CFG
+from utils import make_prompt_template
 
 from datasets import load_dataset
+
+MODEL_NAME: str = str(CFG["model"]["name"])
 
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
 
@@ -20,12 +23,15 @@ def add_dataset(
     answer_key,
     *,
     mask_key=None,
+    think_key=None,
+    correct_key=None,
     question_key_vi=None,
     subset=None,
     split="train",
     n_samples=0,
     min_length=0,
-    max_length=512,
+    max_length=9999999,
+    max_think_length=9999999
 ):
     """
     Tải 1 dataset từ Hugging Face, lọc câu quá dài theo tokenizer,
@@ -56,6 +62,12 @@ def add_dataset(
         if not q or not a:
             continue
 
+        if correct_key is not None:
+            c = ex.get(correct_key)
+            if c != "Yes":
+                continue
+
+
         # lines = a.strip().splitlines()
         # last = lines[-1]
         # if last.startswith("The answer is:"):
@@ -63,9 +75,21 @@ def add_dataset(
         #     lines[-1] = f"The answer is: \\boxed{{{answer}}}"
         # a = "\n".join(lines)
 
+        if think_key is not None:
+            think_tokens = tokenizer(ex.get(think_key))
+            if len(think_tokens) > max_think_length:
+                continue
+
         # Tạo text kết hợp instruction + output để check độ dài token
-        text = PROMPT_TEMPLATE.format(question=q) + a + tokenizer.eos_token
-        tokens = tokenizer(text, truncation=False)
+        messages = make_prompt_template(q, a)
+        # --- 2️⃣ Tạo prompt string từ messages ---
+        # add_generation_prompt=False vì response đã có sẵn, reasoning ẩn nếu enable_thinking=True
+        prompt_text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+        )
+        # --- 3️⃣ Tokenize toàn bộ prompt ---
+        tokens = tokenizer(prompt_text, truncation=False, add_special_tokens=False)
         if len(tokens["input_ids"]) < min_length or len(tokens["input_ids"]) > max_length:
             continue
 
@@ -75,6 +99,8 @@ def add_dataset(
         }
         if mask_key is not None:
             data["mask"] = str(ex.get(mask_key)).strip()
+        if think_key is not None:
+            data["think"] = str(ex.get(think_key)).strip()
 
         all_data.append(data)
         count += 1
@@ -85,36 +111,62 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
     data = []
 
     # Dataset chính
-    add_dataset(
-        data,
-        name="mathqa",
-        tokenizer=tokenizer,
-        path="nlile/hendrycks-MATH-benchmark",
-        question_key_en="problem",
-        answer_key="solution",
-        n_samples=2000,
-        max_length=512
-    )
-    add_dataset(
-        data,
-        name="numinamath",
-        tokenizer=tokenizer,
-        path="AI-MO/NuminaMath-CoT",
-        question_key_en="problem",
-        answer_key="solution",
-        n_samples=1500,
-        max_length=1024
-    )
     # add_dataset(
     #     data,
-    #     name="open_math_masked",
+    #     name="mathqa",
     #     tokenizer=tokenizer,
-    #     path="nvidia/OpenMath-MATH-masked",
-    #     question_key_en="question",
-    #     answer_key="reference_solution",
-    #     mask_key="masked_reference_solution",
+    #     path="nlile/hendrycks-MATH-benchmark",
+    #     question_key_en="problem",
+    #     answer_key="solution",
+    #     n_samples=0,
+    #     max_length=768
+    # )
+    # add_dataset(
+    #     data,
+    #     name="numinamath",
+    #     tokenizer=tokenizer,
+    #     path="AI-MO/NuminaMath-CoT",
+    #     question_key_en="problem",
+    #     answer_key="solution",
+    #     n_samples=48000,
+    #     max_length=2048
+    # )
+    # add_dataset(
+    #     data,
+    #     name="numinamath-tir",
+    #     tokenizer=tokenizer,
+    #     path="AI-MO/NuminaMath-TIR",
+    #     question_key_en="problem",
+    #     answer_key="solution",
+    #     n_samples=20000,
     #     max_length=1024
     # )
+    add_dataset(
+        data,
+        name="s1K-1.1-germini",
+        tokenizer=tokenizer,
+        path="simplescaling/s1K-1.1",
+        question_key_en="question",
+        answer_key="gemini_attempt",
+        correct_key="gemini_grade",
+        think_key="gemini_thinking_trajectory",
+        n_samples=0,
+        max_length=3064,
+        max_think_length=16000
+    )
+    add_dataset(
+        data,
+        name="s1K-1.1-deepseek",
+        tokenizer=tokenizer,
+        path="simplescaling/s1K-1.1",
+        question_key_en="question",
+        answer_key="deepseek_attempt",
+        correct_key="deepseek_grade",
+        think_key="deepseek_thinking_trajectory",
+        n_samples=0,
+        max_length=3064,
+        max_think_length=16000
+    )
 
     random.shuffle(data)
     total = len(data)
