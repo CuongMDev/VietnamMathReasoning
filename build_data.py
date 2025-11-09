@@ -77,7 +77,7 @@ def add_dataset(
 
         if think_key is not None:
             think_tokens = tokenizer(ex.get(think_key))
-            if len(think_tokens) > max_think_length:
+            if len(think_tokens['input_ids']) > max_think_length:
                 continue
 
         # Tạo text kết hợp instruction + output để check độ dài token
