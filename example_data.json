@@ -1,0 +1,43 @@
+[
+  {
+    "id": 1,
+    "name": "Nguyễn Văn A",
+    "age": 25,
+    "city": "Hà Nội",
+    "salary": 15000000,
+    "department": "IT"
+  },
+  {
+    "id": 2,
+    "name": "Trần Thị B",
+    "age": 30,
+    "city": "Hồ Chí Minh",
+    "salary": 20000000,
+    "department": "Marketing"
+  },
+  {
+    "id": 3,
+    "name": "Lê Văn C",
+    "age": 22,
+    "city": "Đà Nẵng",
+    "salary": 12000000,
+    "department": "IT"
+  },
+  {
+    "id": 4,
+    "name": "Phạm Thị D",
+    "age": 35,
+    "city": "Hà Nội",
+    "salary": 25000000,
+    "department": "Sales"
+  },
+  {
+    "id": 5,
+    "name": "Hoàng Văn E",
+    "age": 28,
+    "city": "Hồ Chí Minh",
+    "salary": 18000000,
+    "department": "IT"
+  }
+]
+
