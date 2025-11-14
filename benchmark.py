@@ -10,7 +10,7 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from config import RESULT_FILE, DEVICE, MODEL_CACHE_PATH, DATA_CACHE_PATH, CFG
-from utils import make_prompt_template
+from utils import extract_boxed, is_answer_equal, make_prompt_template
 
 MODEL_NAME = CFG["model"]["name"]
 
@@ -25,37 +25,11 @@ model = AutoModelForCausalLM.from_pretrained(
     attn_implementation="flash_attention_2",
     cache_dir=MODEL_CACHE_PATH
 )
-model = PeftModel.from_pretrained(model, "sft-lora-model")
+model = PeftModel.from_pretrained(model, "sft-cot-model")
 model.generation_config.pad_token_id = tokenizer.eos_token_id
 model.eval()
 
 BATCH_SIZE = 8
-
-# 🔢 Hàm trích xuất kết quả trong \boxed{...}
-def extract_boxed(s: str):
-    start = s.rfind(r"\boxed{")
-    if start != -1:
-        start += len(r"\boxed{")
-        depth = 1
-        i = start
-        while i < len(s) and depth > 0:
-            if s[i] == "{":
-                depth += 1
-            elif s[i] == "}":
-                depth -= 1
-            i += 1
-        content = s[start:i-1].strip()
-        return content
-
-    eq_match = re.search(r"=\s*([^\n]*)$", s)
-    if eq_match:
-        return eq_match.group(1).strip()
-
-    lines = [line.strip() for line in s.splitlines() if line.strip()]
-    if lines:
-        return lines[-1]
-    return "?"
-
 
 # ⚙️ Hàm sinh câu trả lời
 def generate_answers(messages, max_new_tokens=512):
@@ -77,11 +51,11 @@ def generate_answers(messages, max_new_tokens=512):
     return texts
 
 # 📊 Đánh giá accuracy và lưu chi tiết (kèm output đầy đủ)
-def evaluate_dataset(dataset_name, use_local_data=False, eval_size=0, problem="problem", answer="answer", split="test"):
+def evaluate_dataset(dataset_name, config_name=None, use_local_data=False, eval_size=0, problem="problem", answer="answer", split="test"):
     if use_local_data:
         dataset = load_dataset("json", data_files=dataset_name)[split]
     else:
-        dataset = load_dataset(dataset_name, split=split, cache_dir=DATA_CACHE_PATH)
+        dataset = load_dataset(dataset_name, config_name, split=split, cache_dir=DATA_CACHE_PATH)
 
     if eval_size > 0:
         dataset = dataset.select(range(min(eval_size, len(dataset))))
@@ -103,22 +77,20 @@ def evaluate_dataset(dataset_name, use_local_data=False, eval_size=0, problem="p
             batch_questions = [make_prompt_template(s[problem]) for s in batch_samples]
 
             # Batch inference
-            batch_outputs = generate_answers(batch_questions, max_new_tokens=5000)
+            batch_outputs = generate_answers(batch_questions, max_new_tokens=6000)
 
             for sample, output in zip(batch_samples, batch_outputs):
                 question = sample[problem]
                 gt = str(sample[answer]).strip()
                 pred = extract_boxed(output)
+                lines = gt.strip().splitlines()
+                last = lines[-1]
+                gt = last.replace("#### ", "").strip()
+
                 raw_output = output.strip()  # ✨ Lưu toàn bộ kết quả sinh ra
 
                 # So sánh kết quả
-                is_correct = False
-                try:
-                    if float(pred) == float(gt):
-                        is_correct = True
-                except:
-                    if pred == gt:
-                        is_correct = True
+                is_correct = is_answer_equal(pred, gt)
 
                 if is_correct:
                     correct += 1
@@ -152,11 +124,14 @@ def save_result(model_name, dataset_name, accuracy):
 if __name__ == "__main__":
     # hendrycks = evaluate_dataset("nlile/hendrycks-MATH-benchmark", split="test", eval_size=30)
     # save_result(MODEL_NAME, "hendrycks_math", hendrycks)
-    aime_acc = evaluate_dataset("HuggingFaceH4/aime_2024", split="train")
-    save_result(MODEL_NAME, "AIME24-1", aime_acc)
+    # aime_acc = evaluate_dataset("HuggingFaceH4/aime_2024", split="train")
+    # save_result(MODEL_NAME, "AIME24-1", aime_acc)
     #
     # math_acc = evaluate_dataset("HuggingFaceH4/MATH-500", eval_size=30)
     # save_result(MODEL_NAME, "MATH-500", math_acc)
+
+    gsm8k_acc = evaluate_dataset("openai/gsm8k", config_name="main", problem="question", answer="answer", eval_size=30)
+    save_result(MODEL_NAME, "GSM8K", gsm8k_acc)
 
     print("\n📊 Benchmark Summary")
     # print(f"AIME24-1 Accuracy: {aime_acc:.2f}%")

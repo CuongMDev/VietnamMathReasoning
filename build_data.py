@@ -1,24 +1,24 @@
 import os
-
+from pydoc import text
 import random
 import json
-
+import re
+import numpy as np
 from transformers import AutoTokenizer
-
-from config import DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, CFG
-from utils import make_prompt_template
-
 from datasets import load_dataset
 
-MODEL_NAME: str = str(CFG["model"]["name"])
+from config import DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, CFG
+from filter import is_low_quality, has_reasoning_steps, process_mcq
+from utils import make_prompt_template
 
+random.seed(42)
+
+MODEL_NAME: str = str(CFG["model"]["name"])
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
 
 def add_dataset(
     all_data,
-    name,
     path,
-    tokenizer,
     question_key_en,
     answer_key,
     *,
@@ -27,160 +27,202 @@ def add_dataset(
     correct_key=None,
     question_key_vi=None,
     subset=None,
+    answer_signal=None,
+    data_type="math",
     split="train",
-    n_samples=0,
-    min_length=0,
-    max_length=9999999,
-    max_think_length=9999999
+    n_samples=None,
+    streaming=False,
+    min_length=64,
+    max_token=768,
+    max_think_token=512,
+    max_think_length=None,
+    length_sampling=False,
+    length_power=0.7,
+    max_candidates=None,
+    max_data_samples=None,
+    keys_get: list = None
 ):
-    """
-    Tải 1 dataset từ Hugging Face, lọc câu quá dài theo tokenizer,
-    và thêm vào list dữ liệu chung.
-    """
-
-    print(f"📥 Loading {name}...")
-    ds = load_dataset(path, subset, split=split, cache_dir=DATA_CACHE_PATH)
+    print(f"📥 Loading {path}...")
+    ds = load_dataset(path, subset, split=split, cache_dir=DATA_CACHE_PATH, streaming=streaming)
+    if max_data_samples is not None:
+        ds = ds.take(max_data_samples)
     ds = ds.shuffle(seed=42)
-    if n_samples == 0:
-        n_samples = len(ds)
-    # Lấy nhiều hơn n_samples để lọc bớt những câu dài
 
-    count = 0
+    if n_samples is None:
+        n_samples = len(ds)
+
+    candidates = []
     for ex in ds:
-        if count >= n_samples:
+        if not length_sampling and len(candidates) >= n_samples:
+            break
+        # --- giới hạn max_candidates ---
+        if max_candidates is not None and len(candidates) >= max_candidates:
             break
 
+        if keys_get is not None:
+        # keys_get là list of tuples
+            if not any(ex.get(k) == v for k, v in keys_get):
+                continue   # bỏ record nếu không có cặp nào đúng
+
+        q = ex.get(question_key_en)
         if question_key_vi is not None:
-            if count % 2 == 0:
-                q = ex.get(question_key_en)
-            else:
+            if len(candidates) % 2 == 1:
                 q = ex.get(question_key_vi)
-        else:
-            q = ex.get(question_key_en)
 
-        a = ex.get(answer_key)
-        if not q or not a:
+        a = ex.get(answer_key, "")
+        if not q:
             continue
 
-        if correct_key is not None:
-            c = ex.get(correct_key)
-            if c != "Yes":
-                continue
+        if correct_key is not None and ex.get(correct_key) != "Yes":
+            continue
 
+        if answer_signal is not None:
+            lines = a.strip().splitlines()
+            last = lines[-1]
+            if last.startswith(answer_signal):
+                answer = last.replace(answer_signal, "").strip()
+                lines[-1] = f"The answer is: \\boxed{{{answer}}}"
+            a = "\n".join(lines)
 
-        # lines = a.strip().splitlines()
-        # last = lines[-1]
-        # if last.startswith("The answer is:"):
-        #     answer = last.replace("The answer is:", "").strip()
-        #     lines[-1] = f"The answer is: \\boxed{{{answer}}}"
-        # a = "\n".join(lines)
-
+        think_text = None
         if think_key is not None:
-            think_tokens = tokenizer(ex.get(think_key))
-            if len(think_tokens['input_ids']) > max_think_length:
+            think_text = ex.get(think_key, "")
+
+        if answer_key == "</think>":
+            think_match = re.search(r'<think>(.*?)</think>', think_text, flags=re.DOTALL)
+            if think_match:
+                # 2) Lấy phần còn lại *sau thẻ <think>* làm answer
+                a = think_text[think_match.end():].strip()
+
+                think_text = think_match.group(1).strip()
+
+                # 3) Check token length
+                think_tokens = tokenizer(think_text, truncation=False, add_special_tokens=False)
+                if len(think_tokens['input_ids']) > max_think_token:
+                    continue
+            else:
+                # No <think> tags found, skip this record
                 continue
 
-        # Tạo text kết hợp instruction + output để check độ dài token
+            if think_text:
+                if max_think_length is not None and len(think_text) > max_think_length:
+                    continue
+                think_text = re.sub(r'^\s*<[^>]+>\s*', '', think_text, count=1)
+                think_text = re.sub(r'\s*</?[^>]+>\s*$', '', think_text, count=1)
+
+            think_tokens = tokenizer(think_text, truncation=False, add_special_tokens=False)
+            if len(think_tokens['input_ids']) > max_think_token:
+                continue
+
         messages = make_prompt_template(q, a)
-        # --- 2️⃣ Tạo prompt string từ messages ---
-        # add_generation_prompt=False vì response đã có sẵn, reasoning ẩn nếu enable_thinking=True
-        prompt_text = tokenizer.apply_chat_template(
-            messages,
-            tokenize=False,
-        )
-        # --- 3️⃣ Tokenize toàn bộ prompt ---
-        tokens = tokenizer(prompt_text, truncation=False, add_special_tokens=False)
-        if len(tokens["input_ids"]) < min_length or len(tokens["input_ids"]) > max_length:
+        prompt_text = tokenizer.apply_chat_template(messages, tokenize=False)
+        if is_low_quality(prompt_text):
+            continue
+        if not has_reasoning_steps(think_text, a):
             continue
 
-        data = {
-            "instruction": str(q).strip(),
-            "response": str(a).strip()
-        }
-        if mask_key is not None:
-            data["mask"] = str(ex.get(mask_key)).strip()
-        if think_key is not None:
-            data["think"] = str(ex.get(think_key)).strip()
+        tokens = tokenizer(prompt_text, truncation=False, add_special_tokens=False)
+        tok_len = len(tokens["input_ids"])
+        if tok_len < min_length or tok_len > max_token:
+            continue
 
-        all_data.append(data)
-        count += 1
+        # --- xác định độ khó ---
+        if tok_len < 256:
+            difficulty = "easy"
+        elif tok_len < 512:
+            difficulty = "medium"
+        else:
+            difficulty = "hard"
+
+        candidates.append((tok_len, {
+            "instruction": q.strip(),
+            "response": process_mcq(q.strip(), a.strip()),
+            "data_type": data_type,
+            "difficulty": difficulty,
+            **({ "mask": ex.get(mask_key).strip() } if mask_key else {}),
+            **({ "think": think_text.strip() } if think_key else {})
+        }))
+
+    # --- Lấy mẫu cuối cùng ---
+    if length_sampling and candidates:
+        lengths = np.array([c[0] for c in candidates], dtype=float)
+        probs = np.power(lengths, length_power)
+        probs /= probs.sum()
+        selected_indices = np.random.choice(len(candidates), size=min(n_samples, len(candidates)), replace=False, p=probs)
+        for i in selected_indices:
+            all_data.append(candidates[i][1])
+    else:
+        for tok_len, data in candidates[:n_samples]:
+            all_data.append(data)
+
 
 def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
-    """Tạo dataset reasoning toán học và chia train/val/test."""
-
     data = []
 
-    # Dataset chính
-    # add_dataset(
-    #     data,
-    #     name="mathqa",
-    #     tokenizer=tokenizer,
-    #     path="nlile/hendrycks-MATH-benchmark",
-    #     question_key_en="problem",
-    #     answer_key="solution",
-    #     n_samples=0,
-    #     max_length=768
-    # )
-    # add_dataset(
-    #     data,
-    #     name="numinamath",
-    #     tokenizer=tokenizer,
-    #     path="AI-MO/NuminaMath-CoT",
-    #     question_key_en="problem",
-    #     answer_key="solution",
-    #     n_samples=48000,
-    #     max_length=2048
-    # )
-    # add_dataset(
-    #     data,
-    #     name="numinamath-tir",
-    #     tokenizer=tokenizer,
-    #     path="AI-MO/NuminaMath-TIR",
-    #     question_key_en="problem",
-    #     answer_key="solution",
-    #     n_samples=20000,
-    #     max_length=1024
-    # )
+    # Ví dụ dataset
     add_dataset(
         data,
-        name="s1K-1.1-germini",
-        tokenizer=tokenizer,
-        path="simplescaling/s1K-1.1",
-        question_key_en="question",
-        answer_key="gemini_attempt",
-        correct_key="gemini_grade",
-        think_key="gemini_thinking_trajectory",
-        n_samples=0,
-        max_length=3064,
-        max_think_length=16000
+        path="AI-MO/NuminaMath-CoT",
+        question_key_en="problem",
+        answer_key="solution",
+        n_samples=100,
+        max_token=1024
     )
     add_dataset(
         data,
-        name="s1K-1.1-deepseek",
-        tokenizer=tokenizer,
+        path="ServiceNow-AI/R1-Distill-SFT",
+        question_key_en="problem",
+        subset="v0",
+        answer_key="solution",
+        max_token=768,
+        n_samples=100
+    )
+    add_dataset(
+        data,
+        path="nvidia/OpenMathReasoning",
+        question_key_en="problem",
+        split="cot",
+        answer_key="</think>",
+        think_key="generated_solution",
+        max_token=768,
+        max_think_token=2304,
+        max_think_length=14000,
+        max_data_samples=30000,
+        n_samples=600,
+        streaming=True
+    )
+    add_dataset(
+        data,
+        path="gretelai/gretel-math-gsm8k-v0",
+        question_key_en="question",
+        answer_key="answer",
+        answer_signal= "#### ",
+        max_token=1024,
+    )
+    add_dataset(
+        data,
         path="simplescaling/s1K-1.1",
         question_key_en="question",
         answer_key="deepseek_attempt",
-        correct_key="deepseek_grade",
         think_key="deepseek_thinking_trajectory",
-        n_samples=0,
-        max_length=3064,
-        max_think_length=16000
+        data_type="other",
+        correct_key="deepseek_grade",
+        max_token=512,
+        max_think_token=2560,
+        max_think_length=14000,
+        keys_get=[("cot_type", "science")],
     )
 
     random.shuffle(data)
     total = len(data)
 
-    # 🧮 Chia tập (80% train, 10% val, 10% test)
-    train_end = int((1-test_ratio) * total)
-
+    train_end = int((1 - test_ratio) * total)
     splits = {
         "train": data[:train_end],
         "test": data[train_end:]
     }
 
     os.makedirs(output_dir, exist_ok=True)
-
     for split_name, split_data in splits.items():
         path = os.path.join(output_dir, f"{split_name}.json")
         with open(path, "w", encoding="utf-8") as f:
