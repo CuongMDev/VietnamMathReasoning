@@ -9,19 +9,23 @@ def is_low_quality(text: str) -> bool:
         r"Figure\s*\d+",      # tham chiếu đến hình bị lỗi
         r"Question\s*\d+\s*:",# lỗi đánh số câu hỏi không đồng nhất
         r"\.\s*\.\s*\.",      # chuỗi dấu chấm lặp kiểu ASCII art
+        r"\\frac\s*\d"        # \frac ngay sau đó là số mà không có { }
     ]
     return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
-def has_reasoning_steps(think, solution: str) -> bool:
+def is_good_thinking(think, solution: str, max_segment_chars=None) -> bool:
     """Kiểm tra xem có dòng giải tuần tự không."""
     # 1️⃣ Check từ khóa trong think
-    keywords = ["step", "→", "=>", "first", "therefore", "so", "then", "hence"]
-    if think is not None and not any(k in think.lower() for k in keywords):
-        return False
-    
-    # 1️⃣b Check bắt buộc phải có "wait" trong think
-    if think is not None and "wait" not in think.lower():
-        return False
+    if think is not None:
+        segments = think.split("\n\n")  # tách theo đoạn cách dòng đôi
+        for seg in segments:
+            if max_segment_chars is not None and len(seg.strip()) > max_segment_chars:
+                return False
+            
+        keywords = ["step", "→", "=>", "first", "therefore", "so", "then", "hence"]
+
+        if not any(k in think.lower() for k in keywords):
+            return False
 
     # 2️⃣ Check solution có dạng numbered steps: 1., 2., 3. …
     numbered_steps = re.findall(r'^\s*\d+\.', solution, flags=re.MULTILINE)
@@ -53,3 +57,60 @@ def process_mcq(instruction: str, solution: str) -> str:
         return solution_clean.strip()
 
     return (solution or "").strip()
+
+def clean_reasoning(text: str) -> str:
+    # 1) Remove filler words (case-insensitive) together with following commas/spaces
+    fillers = [
+        "hmm", "okay", "let me think", "i should probably", "i remember",
+        "wait", "hold on", "check", "seems", "perhaps", "i will",
+        "first", "alright", "so", "right"
+    ]
+    # build a single regex for fillers (word-boundary), case-insensitive
+    filler_pattern = r'\b(?:' + '|'.join(re.escape(f) for f in fillers) + r')\b[ ,]*'
+    filler_re = re.compile(filler_pattern, re.IGNORECASE)
+    text = filler_re.sub('', text)
+
+    # 2) Normalize some whitespace but do NOT touch operator spacing in math expressions
+    text = re.sub(r'\u00A0', ' ', text)      # NBSP -> space
+    text = re.sub(r'[ \t\f\v]+', ' ', text)  # collapse weird whitespace
+    text = text.strip()
+
+    # 3) Sentence split (prefer splitting on .!? followed by whitespace)
+    if re.search(r'[.!?]', text):
+        raw_sentences = re.split(r'(?<=[.!?])\s+', text)
+    else:
+        raw_sentences = text.splitlines()
+
+    # 4) Compile patterns used in loop (performance + correctness)
+    keep_re = re.compile(
+        r'[0-9]|=|\+|-|\*|/|\^|\(|\)|sqrt|sin|cos|tan|π|pi|≈|≤|≥',
+        re.IGNORECASE
+    )
+    # connectors at sentence start to remove (use IGNORECASE)
+    connector_re = re.compile(r'^(?:so|but|and|then|thus|therefore)\b[ ,]*', re.IGNORECASE)
+    # leading punctuation to strip
+    leading_punct_re = re.compile(r'^[,;:\-\s"\'\(\)]+')
+
+    out_sentences = []
+    for s in raw_sentences:
+        s = s.strip()
+        if not s:
+            continue
+
+        # remove leading connectors like "so", "but", etc.
+        s = connector_re.sub('', s)
+        # remove leading punctuation/spaces (if any)
+        s = leading_punct_re.sub('', s)
+
+        if not s:
+            continue
+
+        # keep only math-relevant sentences
+        if keep_re.search(s):
+            # collapse repeated spaces (but DO NOT add spaces around operators)
+            s = re.sub(r' {2,}', ' ', s)
+            out_sentences.append(s)
+
+    # join with one sentence per line, no extra blank lines or trailing spaces
+    clean_text = "\n".join(out_sentences).strip()
+    return clean_text

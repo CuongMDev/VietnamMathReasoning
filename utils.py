@@ -1,5 +1,5 @@
 import re
-
+import sympy as sp
 
 def find_sublist_indices(seq, sub):
     for i in range(len(seq) - len(sub) + 1):
@@ -8,13 +8,13 @@ def find_sublist_indices(seq, sub):
     return -1
 
 
-def make_prompt_template(user_prompt: str, think=None, respond=None):
+def make_prompt_template(user_prompt: str, think=None, respond=None, boxed_force=True):
     messages = [
         {
             "role": "system",
             "content": "You are a helpful and harmless assistant. " 
                        "You are Qwen developed by Alibaba. "
-                       "You may reason internally but output only the final answer in LaTeX \\boxed."
+                       "You may reason internally but output only the final answer in LaTeX \\boxed." if boxed_force else ""
         },
         {
             "role": "user",
@@ -65,40 +65,52 @@ def extract_boxed(s: str):
         return lines[-1]
     return "?"
 
-def normalize_answer(ans: str) -> str:
-    """
-    Chuẩn hóa answer:
-    - Bỏ LaTeX \text{} và \boxed{}
-    - Bỏ { }, $, ,
-    - Trim whitespace
-    """
-    if not ans:
-        return ""
-    # Bỏ \text{} và \boxed{}
-    ans = re.sub(r'\\text\{[^}]*\}', '', ans)
-    ans = re.sub(r'\\boxed\{([^}]*)\}', r'\1', ans)
-    # Bỏ ký tự { } $ ,
-    ans = re.sub(r'[${},]', '', ans)
-    # Trim
-    return ans.strip()
+def remove_leading_zeros(s: str) -> str:
+    # Nếu s là số nguyên hoặc phân số đơn giản
+    try:
+        return str(int(s))  # '025' -> '25'
+    except:
+        return s
+
+def normalize_expression(expr: str) -> str:
+    expr = expr.strip()
+    expr = expr.replace("\\dfrac", "\\frac")
+
+    # 1) Xử lý phần trăm
+    expr = re.sub(r'(\d+)\s*%', r'(\1/100)', expr)
+    expr = expr.replace("\\%", "/100")
+
+    # 2) Xử lý dấu phẩy hàng nghìn: 3,003 → 3003
+    #    Giữ được cấu trúc số dạng 123,456.78 → 123456.78
+    expr = re.sub(r'(?<=\d),(?=\d{3}(\D|$))', '', expr)
+
+    expr = expr.replace(" ", "")
+    return expr
+
+
+def latex_to_sympy(expr: str):
+    expr = re.sub(r'\\frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1)/(\2)', expr)
+    expr = re.sub(r'\\sqrt\{([^{}]+)\}', r'sqrt(\1)', expr)
+    return expr
 
 
 def is_answer_equal(pred: str, gt: str) -> bool:
-    """
-    So sánh 2 answer:
-    1. Chuẩn hóa
-    2. Nếu convert được sang float thì so sánh float
-    3. Nếu không thì so sánh string
-    """
-    pred_norm = normalize_answer(pred)
-    gt_norm = normalize_answer(gt)
-    
-    is_correct = False
+    pred_norm = remove_leading_zeros(latex_to_sympy(normalize_expression(pred)))
+    gt_norm   = remove_leading_zeros(latex_to_sympy(normalize_expression(gt)))
+
     try:
-        if float(pred_norm) == float(gt_norm):
-            is_correct = True
-    except:
-        if pred_norm.lower() == gt_norm.lower():  # ignore case
-            is_correct = True
+        return sp.simplify(f"({pred_norm}) - ({gt_norm})") == 0
+    except Exception:
+        return pred_norm == gt_norm
     
-    return is_correct
+# remove first and last tags <...>
+def remove_tags(text: str) -> str:
+    text = re.sub(r'^\s*<[^>]+>\s*', '', text, count=1)
+    text = re.sub(r'\s*</?[^>]+>\s*$', '', text, count=1)
+    return text
+
+# just remove all tag in tags list, not remove content inside
+def remove_all_tags(text: str, tags: list) -> str:
+    for tag in tags:
+        text = re.sub(fr'</?{tag}\b[^>]*>', '', text, flags=re.IGNORECASE)
+    return text

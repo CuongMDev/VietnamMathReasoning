@@ -27,8 +27,6 @@ VAL_RATIO: float = float(CFG["dataset"]["val_ratio"])
 
 # --- Load tokenizer ---
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
-if tokenizer.pad_token is None:
-    tokenizer.pad_token = tokenizer.eos_token
 tokenizer.padding_side = 'left'
 
 # --- Load model ---
@@ -62,7 +60,7 @@ val_dataset = dataset_split["test"]
 
 def format_example(example):
     think = example.get('think')
-    messages = make_prompt_template(example['instruction'], think=think, respond=example['response'])
+    messages = make_prompt_template(example['problem'], think=think, respond=example['response'], boxed_force=example['boxed_force'])
 
     # --- 2️⃣ Tạo prompt string từ messages ---
     # add_generation_prompt=False vì response đã có sẵn, reasoning ẩn nếu enable_thinking=True
@@ -113,6 +111,7 @@ training_args = TrainingArguments(
     save_total_limit=CFG["training"]["save_total_limit"],
     report_to="tensorboard",
     logging_dir="./logs",
+    max_grad_norm=0.2,
     lr_scheduler_type=CFG["training"]["lr_scheduler_type"],
     warmup_ratio=CFG["training"]["warmup_ratio"],
     load_best_model_at_end=True,
