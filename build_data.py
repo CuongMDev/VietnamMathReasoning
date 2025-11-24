@@ -17,11 +17,14 @@ def add_dataset(
     path,
     tokenizer,
     question_key_en,
-    question_key_vi,
     answer_key,
+    *,
+    mask_key=None,
+    question_key_vi=None,
     subset=None,
     split="train",
-    n_samples=1000,
+    n_samples=0,
+    min_length=0,
     max_length=512,
 ):
     """
@@ -41,10 +44,14 @@ def add_dataset(
         if count >= n_samples:
             break
 
-        if count % 2 == 0:
-            q = ex.get(question_key_en)
+        if question_key_vi is not None:
+            if count % 2 == 0:
+                q = ex.get(question_key_en)
+            else:
+                q = ex.get(question_key_vi)
         else:
-            q = ex.get(question_key_vi)
+            q = ex.get(question_key_en)
+
         a = ex.get(answer_key)
         if not q or not a:
             continue
@@ -57,18 +64,20 @@ def add_dataset(
         # a = "\n".join(lines)
 
         # Tạo text kết hợp instruction + output để check độ dài token
-        text = PROMPT_TEMPLATE.format(question='q') + a
+        text = PROMPT_TEMPLATE.format(question=q) + a + tokenizer.eos_token
         tokens = tokenizer(text, truncation=False)
-        if len(tokens["input_ids"]) > max_length:
+        if len(tokens["input_ids"]) < min_length or len(tokens["input_ids"]) > max_length:
             continue
 
-        all_data.append({
+        data = {
             "instruction": str(q).strip(),
             "response": str(a).strip()
-        })
+        }
+        if mask_key is not None:
+            data["mask"] = str(ex.get(mask_key)).strip()
+
+        all_data.append(data)
         count += 1
-
-
 
 def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
     """Tạo dataset reasoning toán học và chia train/val/test."""
@@ -82,10 +91,9 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
         tokenizer=tokenizer,
         path="nlile/hendrycks-MATH-benchmark",
         question_key_en="problem",
-        question_key_vi="problem",
         answer_key="solution",
-        n_samples=1000,
-        max_length=768
+        n_samples=2000,
+        max_length=512
     )
     add_dataset(
         data,
@@ -93,11 +101,20 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
         tokenizer=tokenizer,
         path="AI-MO/NuminaMath-CoT",
         question_key_en="problem",
-        question_key_vi="problem",
         answer_key="solution",
-        n_samples=1000,
-        max_length=768
+        n_samples=1500,
+        max_length=1024
     )
+    # add_dataset(
+    #     data,
+    #     name="open_math_masked",
+    #     tokenizer=tokenizer,
+    #     path="nvidia/OpenMath-MATH-masked",
+    #     question_key_en="question",
+    #     answer_key="reference_solution",
+    #     mask_key="masked_reference_solution",
+    #     max_length=1024
+    # )
 
     random.shuffle(data)
     total = len(data)

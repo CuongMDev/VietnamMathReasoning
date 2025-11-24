@@ -2,3 +2,8 @@
 __pycache__/
 
 .idea/
+data/
+hf_cache
+.vscode/
+sft-lora-model-tir/
+grpo-lora-model/
