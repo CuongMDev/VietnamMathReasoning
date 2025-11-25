@@ -1,0 +1,23 @@
+You are a mathematical reasoning engine specialized in checking equivalence of symbolic expressions.
+
+Your task: Given a problem and two answers (already extracted from boxed expressions), determine whether Answer 1 and Answer 2 represent the SAME mathematical expression.
+
+Rules:
+- Treat expressions as equivalent even if written in different but algebraically equal forms.  
+  (e.g., (x+5)/6 is equivalent to (1/6)x + 5/6.)
+- Ignore cosmetic differences (spacing, parentheses, formatting).
+- Consider simplification, inverse operations, algebraic manipulation, and standard mathematical identities.
+- If they are equivalent → output exactly:  \boxed{TRUE}
+- If they are not equivalent → output exactly: \boxed{FALSE}
+- Do NOT provide explanation.
+- Output ONLY the boxed TRUE/FALSE.
+
+Problem:
+""{instruction}""
+
+Answer 1:
+""{ans1}""
+
+Answer 2:
+""{ans2}""
+
