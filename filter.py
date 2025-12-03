@@ -1,3 +1,4 @@
+import random
 import re
 
 def is_low_quality(text: str) -> bool:
@@ -13,24 +14,29 @@ def is_low_quality(text: str) -> bool:
     ]
     return any(re.search(p, text, re.IGNORECASE) for p in patterns)
 
+def is_step_by_step(solution: str) -> bool:
+    # 2️⃣ Check solution có numbered steps dạng \n1., \n2., ...
+    numbered_steps = re.findall(r'(?<=\n)\s*(\d+)\.', solution)
+    if len(numbered_steps) < 2:
+        return False
+    
+    return True
 def is_good_thinking(think, solution: str, max_segment_chars=None) -> bool:
-    """Kiểm tra xem có dòng giải tuần tự không."""
-    # 1️⃣ Check từ khóa trong think
+    """Kiểm tra think và numbered steps kiểu newline + số + dấu chấm."""
+    
+    # 1️⃣ Kiểm tra think
     if think is not None:
-        segments = think.split("\n\n")  # tách theo đoạn cách dòng đôi
+        segments = think.split("\n\n")
         for seg in segments:
             if max_segment_chars is not None and len(seg.strip()) > max_segment_chars:
                 return False
-            
         keywords = ["step", "→", "=>", "first", "therefore", "so", "then", "hence"]
-
         if not any(k in think.lower() for k in keywords):
             return False
 
-    # 2️⃣ Check solution có dạng numbered steps: 1., 2., 3. …
-    numbered_steps = re.findall(r'^\s*\d+\.', solution, flags=re.MULTILINE)
-    if len(numbered_steps) < 2:
+    if "\\begin{" in solution:
         return False
+
     return True
 
 def process_mcq(instruction: str, solution: str) -> str:
@@ -53,10 +59,20 @@ def process_mcq(instruction: str, solution: str) -> str:
 
         # Match \boxed{...} với capture group cho nội dung bên trong
         pattern = r'\\boxed\{((?:[^{}]|(?:\{[^}]*\}))*)\}'
-        solution_clean = re.sub(pattern, replace_boxed, solution or "")
-        return solution_clean.strip()
-
-    return (solution or "").strip()
+        solution = re.sub(pattern, replace_boxed, solution or "")
+    
+    # 3️⃣ Chuyển \n1., \n2., ... thành ### Step 1, ### Step 2
+    """
+    Chuyển các dòng kiểu \n1, \n2, ... thành \n### Step 1:, \n### Step 2:, ...
+    """
+    def repl(match):
+        num = match.group(1)
+        return f"\n\n---\n\n### Step {num}: "
+    
+    # Regex: tìm \n theo sau là số và dấu chấm
+    solution = re.sub(r'\n\s*(\d+)\.', repl, solution)
+    
+    return solution.strip()
 
 def clean_reasoning(text: str) -> str:
     # 1) Remove filler words (case-insensitive) together with following commas/spaces

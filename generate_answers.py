@@ -105,19 +105,20 @@ def generate_answers_budget_forcing(
             
             # Số token sinh ra trong lần generate này
             new_tokens = total_tokens - inputs["input_ids"].shape[1]
-
             current_text = tokenizer.decode(sequence, skip_special_tokens=False)
+
+            tokens_to_subtract = new_tokens - 1
+            current_max_tokens_thinking_tmp = max(0, current_max_tokens_thinking_tmp - tokens_to_subtract)
 
             # Nếu gặp </think>
             if "</think>" in current_text:
                 ignore_count += 1
                 if ignore_count <= num_ignore:
-                    # Trừ số token sinh ra (trừ 1 cho </think>)
-                    tokens_to_subtract = new_tokens - 1
-                    current_max_tokens_thinking_tmp = max(0, current_max_tokens_thinking_tmp - tokens_to_subtract)
+                    # cộng số token sinh ra (cộng 1 cho </think>)
+                    current_max_tokens_thinking_tmp += 1
 
                     # Bỏ </think> trước khi append Wait
-                    current_text = current_text[:-len("</think>\n")] + "Wait, "
+                    current_text = current_text[:-len("</think>")] + "\nWait, "
                     continue
                 else:
                     break
@@ -133,7 +134,7 @@ def generate_answers_budget_forcing(
         with torch.no_grad():
             outputs = model.generate(
                 **inputs,
-                max_new_tokens=max_new_tokens,
+                max_new_tokens=max_new_tokens + current_max_tokens_thinking_tmp,
                 return_dict_in_generate=True,
                 do_sample=False,
             )

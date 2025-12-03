@@ -3,7 +3,9 @@ import torch
 import yaml
 
 with open("config.yml", "r") as f:
-    CFG = yaml.safe_load(f)
+    SFT_CFG = yaml.safe_load(f)
+with open("grpo_config.yml", "r") as f:
+    GRPO_CFG = yaml.safe_load(f)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 RESULT_FILE = "benchmark_results.csv"

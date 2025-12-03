@@ -8,19 +8,19 @@ def find_sublist_indices(seq, sub):
     return -1
 
 
-def make_prompt_template(user_prompt: str, think=None, respond=None, boxed_force=True):
-    messages = [
-        {
+def make_prompt_template(user_prompt: str, think=None, respond=None, boxed_force=True, add_system=True):
+    messages = []
+    if add_system:
+        messages.append({
             "role": "system",
             "content": "You are a helpful and harmless assistant. " 
                        "You are Qwen developed by Alibaba. "
-                       "You may reason internally but output only the final answer in LaTeX \\boxed." if boxed_force else ""
-        },
-        {
-            "role": "user",
-            "content": user_prompt
-        }
-    ]
+                       "Please reason step by step, and put your final answer within \\boxed{}."
+        })
+    messages.append({
+        "role": "user",
+        "content": user_prompt
+    })
 
     assistant_content = ""
 
@@ -30,6 +30,8 @@ def make_prompt_template(user_prompt: str, think=None, respond=None, boxed_force
 
     # Nếu có respond, thêm message của assistant
     if respond is not None:
+        if think is None:
+            assistant_content += f"<think>\n\n</think>\n"
         assistant_content += respond
 
     if assistant_content:
