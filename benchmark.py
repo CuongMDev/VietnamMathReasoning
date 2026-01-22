@@ -9,29 +9,31 @@ from peft import PeftModel
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from build_data import add_dataset
+from filter import fix_multiple_choice_answer
 from generate_answers import generate_answers, generate_answers_budget_forcing
 
-from config import RESULT_FILE, DEVICE, MODEL_CACHE_PATH, DATA_CACHE_PATH, CFG
+from config import RESULT_FILE, DEVICE, MODEL_CACHE_PATH, DATA_CACHE_PATH, SFT_CFG
 from utils import extract_boxed, is_answer_equal, make_prompt_template
 
-MODEL_NAME = CFG["model"]["name"]
+MODEL_NAME = SFT_CFG["model"]["name"]
 
 # 🧠 Tải model và tokenizer
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
 tokenizer.padding_side = "left"
 # --- Load model ---
 model = AutoModelForCausalLM.from_pretrained(
-    "sft-cot-model",
+    MODEL_NAME,
+    # "sft-cot-model/checkpoint-4550",
     torch_dtype=torch.float16,  # tiết kiệm VRAM
     device_map='cuda',
-    attn_implementation="flash_attention_2",
+    # attn_implementation="flash_attention_3",
     cache_dir=MODEL_CACHE_PATH
 )
 # model = PeftModel.from_pretrained(model, "sft-cot-model")
 model.generation_config.pad_token_id = tokenizer.pad_token_id
 model.eval()
 
-BATCH_SIZE = 8
+BATCH_SIZE = 20
 
 # 📊 Đánh giá accuracy và lưu chi tiết (kèm output đầy đủ)
 def evaluate_dataset(dataset_name, config_name=None, use_local_data=False, eval_size=0, problem="problem", answer="answer", split="test"):
@@ -62,17 +64,19 @@ def evaluate_dataset(dataset_name, config_name=None, use_local_data=False, eval_
             batch_questions = [make_prompt_template(s[problem]) for s in batch_samples]
 
             # Batch inference → trả về (outputs, token_counts)
-            batch_outputs, batch_token_counts = generate_answers_budget_forcing(
+            batch_outputs, batch_token_counts = generate_answers(
                 model,
                 tokenizer,
                 batch_questions,
-                max_new_tokens=1024, 
-                max_tokens_thinking_tmp=4000,
+                max_new_tokens=2000, 
+                enable_thinking=False,
+                # max_tokens_thinking_tmp=3000
             )
 
             for sample, output, tok_count in zip(batch_samples, batch_outputs, batch_token_counts):
                 question = sample[problem]
                 gt = str(sample[answer]).strip()
+
                 pred = extract_boxed(output)
 
                 # Lấy dòng cuối ground truth
@@ -133,8 +137,12 @@ if __name__ == "__main__":
     # gsm8k_acc = evaluate_dataset("openai/gsm8k", config_name="main", problem="question", answer="answer", eval_size=1000)
     # save_result(MODEL_NAME, "GSM8K", *gsm8k_acc)
 
-    gretelai_gsm8k_acc = evaluate_dataset("data/test.json", split="train", use_local_data=True, eval_size=30)
+    gretelai_gsm8k_acc = evaluate_dataset("data/val.json", split="train", use_local_data=True, eval_size=100)
     save_result(MODEL_NAME, "gretelai-GSM8K", *gretelai_gsm8k_acc)
+
+    # vietnam_high_school_acc = evaluate_dataset("data/vietnam_high_school_mathematics.json", split="train", use_local_data=True)
+    # save_result(MODEL_NAME, "vietnam_high_school_mathematics", *vietnam_high_school_acc)
+
 
     print("\n📊 Benchmark Summary")
     # print(f"AIME24-1 Accuracy: {aime_acc:.2f}%")

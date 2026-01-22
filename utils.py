@@ -1,5 +1,6 @@
 import re
-import sympy as sp
+from latex2sympy2_extended import NormalizationConfig
+from math_verify import LatexExtractionConfig, verify, parse
 
 def find_sublist_indices(seq, sub):
     for i in range(len(seq) - len(sub) + 1):
@@ -17,7 +18,7 @@ def make_prompt_template(user_prompt: str, think=None, respond=None, boxed_force
                        "You are Qwen developed by Alibaba. "
         })
         if boxed_force:
-            messages[-1]["content"] += "Please reason step by step, and put your final answer within \\boxed{}."
+            messages[-1]["content"] += "Please reason step by step, and put your final answer within \\boxed{}. The \\boxed{} should contain ONLY the final answer (number, expression, or value) without any explanation or units unless the problem specifically asks for it."
     messages.append({
         "role": "user",
         "content": user_prompt
@@ -68,44 +69,42 @@ def extract_boxed(s: str):
         return lines[-1]
     return "?"
 
-def remove_leading_zeros(s: str) -> str:
-    # Nếu s là số nguyên hoặc phân số đơn giản
-    try:
-        return str(int(s))  # '025' -> '25'
-    except:
-        return s
-
-def normalize_expression(expr: str) -> str:
-    expr = expr.strip()
-    expr = expr.replace("\\dfrac", "\\frac")
-
-    # 1) Xử lý phần trăm
-    expr = re.sub(r'(\d+)\s*%', r'(\1/100)', expr)
-    expr = expr.replace("\\%", "/100")
-
-    # 2) Xử lý dấu phẩy hàng nghìn: 3,003 → 3003
-    #    Giữ được cấu trúc số dạng 123,456.78 → 123456.78
-    expr = re.sub(r'(?<=\d),(?=\d{3}(\D|$))', '', expr)
-
-    expr = expr.replace(" ", "")
-    return expr
-
-
-def latex_to_sympy(expr: str):
-    expr = re.sub(r'\\frac\{([^{}]+)\}\{([^{}]+)\}', r'(\1)/(\2)', expr)
-    expr = re.sub(r'\\sqrt\{([^{}]+)\}', r'sqrt(\1)', expr)
-    return expr
-
+def extract_after_equals(s: str) -> str:
+    """Extract the part after '=' if present, otherwise return original string."""
+    if '=' in s:
+        return s.split('=')[-1].strip()
+    return s.strip()
 
 def is_answer_equal(pred: str, gt: str) -> bool:
-    pred_norm = remove_leading_zeros(latex_to_sympy(normalize_expression(pred)))
-    gt_norm   = remove_leading_zeros(latex_to_sympy(normalize_expression(gt)))
+    # Extract part after '=' if present
+    pred = extract_after_equals(pred)
+    gt = extract_after_equals(gt)
 
-    try:
-        return sp.simplify(f"({pred_norm}) - ({gt_norm})") == 0
-    except Exception:
-        return pred_norm == gt_norm
-    
+    pred = f"\\boxed{{{pred}}}"
+    gt = f"\\boxed{{{gt}}}"
+    gold_parsed = parse(gt, extraction_mode="first_match", extraction_config=[LatexExtractionConfig()])
+    answer_parsed = parse(
+        pred,
+        extraction_config=[
+            LatexExtractionConfig(
+                normalization_config=NormalizationConfig(
+                    nits=False,
+                    malformed_operators=False,
+                    basic_latex=True,
+                    equations=True,
+                    boxed=True,
+                    units=True,
+                ),
+                boxed_match_priority=0,
+                try_extract_without_anchor=False,
+            )
+        ],
+        extraction_mode="first_match",
+    )
+
+    is_correct = verify(answer_parsed, gold_parsed)
+    return is_correct
+
 # remove first and last tags <...>
 def remove_tags(text: str) -> str:
     text = re.sub(r'^\s*<[^>]+>\s*', '', text, count=1)
