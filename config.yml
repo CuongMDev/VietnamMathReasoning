@@ -1,0 +1,33 @@
+model:
+  name: "Qwen/Qwen3-1.7B"
+
+training:
+  output_dir: "./sft-cot-model"
+  learning_rate: 2e-4
+  min_lr_rate: 0.1
+  batch_size: 1
+  epochs: 5
+  weight_decay: 0.01
+  gradient_accumulation_steps: 32
+  logging_steps: 50
+  eval_steps: 350
+  save_steps: 350
+  save_total_limit: 2
+  warmup_ratio: 0.03
+
+lora:
+  using_lora: True
+  r: 32
+  lora_alpha: 128
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+  lora_dropout: 0.05
+  bias: "none"
+
+dataset:
+  train_path: "/train_calculus.json"
+  val_ratio: 0.015
+  test_ratio: 0.03

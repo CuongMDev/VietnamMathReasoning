@@ -39,6 +39,21 @@ def is_good_thinking(think, solution: str, max_segment_chars=None) -> bool:
 
     return True
 
+def fix_multiple_choice_answer(solution):
+    def replace_boxed(match):
+        content = match.group(1)
+        # Bắt chữ cái A-D (case-insensitive), có thể có dấu . ) : , ; hoặc space theo sau
+        letter_match = re.search(r'(?i)([A-D])(?=[\s\.\)\,:;]|$)', content)
+        if letter_match:
+            return f"\\boxed{{{letter_match.group(1).upper()}}}"
+        return match.group(0)
+
+    # Match \boxed{...} với capture group cho nội dung bên trong (hỗ trợ nested {})
+    pattern = r'\\boxed\{((?:[^{}]|\{[^{}]*\})*)\}'
+    solution = re.sub(pattern, replace_boxed, solution or "")
+
+    return solution
+
 def process_mcq(instruction: str, solution: str) -> str:
     """
     Xử lý MCQ:
@@ -46,20 +61,10 @@ def process_mcq(instruction: str, solution: str) -> str:
     - Nếu có \boxed{...} thì chỉ giữ letter A-D trong \boxed{} (nếu tìm được).
     - Nếu không tìm letter, giữ nguyên \boxed{...}.
     """
-    has_mcq_instr = bool(re.search(r'(?i)(?:\([A-D]\)|[A-D][\)\.]|Answer\s*[:]\s*[A-D])', instruction or ""))
+    # has_mcq_instr = bool(re.search(r'(?i)(?:\([A-D]\)|[A-D][\)\.]|Answer\s*[:]\s*[A-D])', instruction or ""))
     
-    if has_mcq_instr:
-        def replace_boxed(match):
-            content = match.group(1)
-            # Bắt chữ cái A-D (case-insensitive)
-            letter_match = re.search(r'(?i)([A-D])(?=[\s\.\)\(,:;]|$)', content)
-            if letter_match:
-                return f"\\boxed{{{letter_match.group(1).upper()}}}"
-            return match.group(0)
-
-        # Match \boxed{...} với capture group cho nội dung bên trong
-        pattern = r'\\boxed\{((?:[^{}]|(?:\{[^}]*\}))*)\}'
-        solution = re.sub(pattern, replace_boxed, solution or "")
+    # if has_mcq_instr:
+    #     solution = fix_multiple_choice_answer(solution)
     
     # 3️⃣ Chuyển \n1., \n2., ... thành ### Step 1, ### Step 2
     """

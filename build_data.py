@@ -8,14 +8,14 @@ import numpy as np
 from transformers import AutoTokenizer
 from datasets import load_dataset
 
-from config import DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, CFG
-from filter import clean_reasoning, is_low_quality, is_good_thinking, process_mcq
+from config import DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, SFT_CFG
+from filter import clean_reasoning, is_low_quality, is_good_thinking, is_step_by_step, process_mcq
 from utils import extract_boxed, make_prompt_template, remove_all_tags, remove_tags
 
 random.seed(42)
 np.random.seed(42)
 
-MODEL_NAME: str = str(CFG["model"]["name"])
+MODEL_NAME: str = str(SFT_CFG["model"]["name"])
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
 
 def add_dataset(
@@ -51,7 +51,7 @@ def add_dataset(
     ds = load_dataset(path, subset, split=split, cache_dir=DATA_CACHE_PATH, streaming=streaming)
     if max_data_samples is not None:
         ds = ds.take(max_data_samples)
-    ds = ds.shuffle(seed=42)
+    ds = ds.shuffle(seed=3407)
 
     if n_samples is None:
         n_samples = len(ds)
@@ -134,6 +134,8 @@ def add_dataset(
 
         if not is_good_thinking(think_text, a, max_segment_chars=max_think_segment_chars):
             continue
+        if not is_step_by_step(a):
+            continue
 
         messages = make_prompt_template(q, think=think_text, respond=a, boxed_force=boxed_force)
         prompt_text = tokenizer.apply_chat_template(messages, tokenize=False)
@@ -181,9 +183,25 @@ def add_dataset(
         for tok_len, data in candidates[:n_samples]:
             all_data.append(data)
 
+    print(f"Dataset {path} has {len(candidates)} samples")
+
 
 def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
     data = []
+
+    # add_dataset(
+    #     data,
+    #     path="open-r1/OpenR1-Math-220k",
+    #     question_key_en="problem",
+    #     answer_key="</think>",
+    #     think_key="generations",
+    #     correct_key="correctness_math_verify",
+    #     max_token=7000,
+    #     min_token=2000,
+    #     n_samples=1000,
+    #     streaming=True,
+    #     # max_think_segment_chars=500,
+    # )
 
     add_dataset(
         data,
@@ -192,13 +210,15 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
         split="cot",
         answer_key="</think>",
         think_key="generated_solution",
-        max_token=7000,
-        n_samples=90000,
+        max_token=2700,
+        n_samples=50000,
         streaming=True,
+        max_candidates=100000,
+        length_sampling=False,
         max_data_samples=3000000,
-        max_think_segment_chars=390,
-        diversify_key="problem_source", 
-        max_per_group=30000,
+        # max_think_segment_chars=400,
+        diversify_key="problem_source",
+        max_per_group=17000
     )
 
     add_dataset(
@@ -208,62 +228,62 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
         answer_key="</think>",
         subset='v0',
         think_key="reannotated_assistant_content",
-        max_token=7000,
-        n_samples=10000,
-        max_candidates=20000,
+        max_token=2700,
+        n_samples=5000,
+        max_candidates=10000,
         length_sampling=True,
-        max_think_segment_chars=290,
+        # max_think_segment_chars=300,
         diversify_key="source", 
-        max_per_group=3000,
+        max_per_group=2500,
     )
 
-    add_dataset(
-        data,
-        path="zwhe99/DeepMath-103K",
-        question_key_en="question",
-        answer_key="</think>",
-        think_key="r1_solution_1",
-        max_token=7000,
-        n_samples=1000,
-        streaming=True,
-        max_think_segment_chars=390,
-    )
+    # add_dataset(
+    #     data,
+    #     path="zwhe99/DeepMath-103K",
+    #     question_key_en="question",
+    #     answer_key="</think>",
+    #     think_key="r1_solution_1",
+    #     max_token=4000,
+    #     n_samples=1000,
+    #     streaming=True,
+    #     # max_think_segment_chars=400,
+    # )
 
-    add_dataset(
-        data,
-        path="zwhe99/DeepMath-103K",
-        question_key_en="question",
-        answer_key="</think>",
-        think_key="r1_solution_2",
-        max_token=7000,
-        n_samples=1000,
-        streaming=True,
-        max_think_segment_chars=390,
-    )
+    # add_dataset(
+    #     data,
+    #     path="zwhe99/DeepMath-103K",
+    #     question_key_en="question",
+    #     answer_key="</think>",
+    #     think_key="r1_solution_2",
+    #     max_token=4000,
+    #     n_samples=1000,
+    #     streaming=True,
+    #     # max_think_segment_chars=400,
+    # )
 
-    add_dataset(
-        data,
-        path="zwhe99/DeepMath-103K",
-        question_key_en="question",
-        answer_key="</think>",
-        think_key="r1_solution_3",
-        max_token=7000,
-        n_samples=1000,
-        streaming=True,
-        max_think_segment_chars=390,
-    )
+    # add_dataset(
+    #     data,
+    #     path="zwhe99/DeepMath-103K",
+    #     question_key_en="question",
+    #     answer_key="</think>",
+    #     think_key="r1_solution_3",
+    #     max_token=4000,
+    #     n_samples=1000,
+    #     streaming=True,
+    #     # max_think_segment_chars=400,
+    # )
 
-    add_dataset(
-        data,
-        path="dvilasuero/natural-science-reasoning",
-        question_key_en="question",
-        answer_key="</think>",
-        think_key="r1-response",
-        data_type="science",
-        max_token=7000,
-        boxed_force=False,
-        remove_answer_special_tags_list=["think", "answer"]
-    )
+    # add_dataset(
+    #     data,
+    #     path="dvilasuero/natural-science-reasoning",
+    #     question_key_en="question",
+    #     answer_key="</think>",
+    #     think_key="r1-response",
+    #     data_type="science",
+    #     max_token=2600,
+    #     boxed_force=False,
+    #     remove_answer_special_tags_list=["think", "answer"]
+    # )
 
     random.shuffle(data)
     total = len(data)

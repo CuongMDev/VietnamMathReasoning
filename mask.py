@@ -4,16 +4,16 @@ IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
 def mask_step_numbers(tokenizer, prompt_text, input_ids, labels, ignore_id=IGNORE_TOKEN_ID):
     step_token_ids = tokenizer("### Step ", add_special_tokens=False)["input_ids"]
+    positions = []  # lưu danh sách (start_pos, length)
+
     search_text_pos = 0
     search_input_pos = 0
 
     while True:
-        # --- 1️⃣ tìm "### Step " trong text ---
         idx = prompt_text.find("### Step ", search_text_pos)
         if idx == -1:
             break
 
-        # --- 2️⃣ tìm token trong input_ids từ search_input_pos ---
         step_pos = None
         for i in range(search_input_pos, len(input_ids) - len(step_token_ids) + 1):
             if input_ids[i:i+len(step_token_ids)] == step_token_ids:
@@ -24,22 +24,32 @@ def mask_step_numbers(tokenizer, prompt_text, input_ids, labels, ignore_id=IGNOR
             search_text_pos = idx + len("### Step ")
             continue
 
-        # --- 3️⃣ tìm dấu ":" trong text ---
         colon_idx = prompt_text.find(":", idx)
         if colon_idx == -1:
             break
 
-        # --- 4️⃣ lấy token của số giữa "### Step " và ":" ---
         num_text = prompt_text[idx + len("### Step "): colon_idx]
         num_token_ids = tokenizer(num_text, add_special_tokens=False)["input_ids"]
 
-        # --- 5️⃣ mask các token số ---
-        for j in range(step_pos + len(step_token_ids), step_pos + len(step_token_ids) + len(num_token_ids)):
-            labels[j] = ignore_id
+        # Lưu vị trí bước này
+        positions.append((step_pos + len(step_token_ids), len(num_token_ids)))
 
-        # --- 6️⃣ cập nhật vị trí tìm tiếp theo ---
         search_text_pos = colon_idx + 1
         search_input_pos = step_pos + len(step_token_ids) + len(num_token_ids)
+
+    # ❗ Nếu không tìm được step nào thì return luôn
+    if not positions:
+        return labels
+
+    # --- Chọn ngẫu nhiên 1 step để giữ nguyên ---
+    keep_idx = random.randrange(len(positions))
+
+    # --- Mask tất cả các step còn lại ---
+    for i, (start, L) in enumerate(positions):
+        if i == keep_idx:
+            continue  # skip, không mask
+        for j in range(start, start + L):
+            labels[j] = ignore_id
 
     return labels
 

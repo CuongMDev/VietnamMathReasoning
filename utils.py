@@ -15,8 +15,9 @@ def make_prompt_template(user_prompt: str, think=None, respond=None, boxed_force
             "role": "system",
             "content": "You are a helpful and harmless assistant. " 
                        "You are Qwen developed by Alibaba. "
-                       "Please reason step by step, and put your final answer within \\boxed{}."
         })
+        if boxed_force:
+            messages[-1]["content"] += "Please reason step by step, and put your final answer within \\boxed{}."
     messages.append({
         "role": "user",
         "content": user_prompt
