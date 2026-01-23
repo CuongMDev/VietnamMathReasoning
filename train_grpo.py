@@ -1,9 +1,11 @@
 import random
+import numpy
 import torch
 from datasets import load_dataset
 from peft import LoraConfig, TaskType, get_peft_model
 from transformers import AutoTokenizer, AutoModelForCausalLM, get_cosine_with_min_lr_schedule_with_warmup
 from trl import GRPOTrainer, GRPOConfig
+import os
 
 from config import GRPO_CFG, MODEL_CACHE_PATH
 from utils import make_prompt_template
@@ -20,11 +22,11 @@ tokenizer.padding_side = 'left'
 
 # --- Load pretrained model ---
 model = AutoModelForCausalLM.from_pretrained(
-    "sft-cot-model",
+    MODEL_NAME,
     dtype=torch.bfloat16,
     device_map='auto',
     cache_dir=MODEL_CACHE_PATH,
-    attn_implementation="flash_attention_2",
+    # attn_implementation="flash_attention_3",
 )
 
 # --- LoRA ---
@@ -70,7 +72,12 @@ REWARD_FUNCS_REGISTRY = {
     "tag_count": tag_count_reward,
 }
 
-reward_funcs = [REWARD_FUNCS_REGISTRY[func] for func in GRPO_CFG["grpo"]["reward_funcs"]]
+reward_funcs = [
+    REWARD_FUNCS_REGISTRY[name]
+    for name in GRPO_CFG["grpo"]["reward_funcs"].keys()
+]
+
+reward_weights = list(GRPO_CFG["grpo"]["reward_funcs"].values())
 
 def format_example(example):
     # --- 1️⃣ Tạo messages theo template ---
@@ -82,7 +89,7 @@ def format_example(example):
         "solution": f'${answer}$'
     }
 
-train_tokenized_dataset = dataset.map(format_example, remove_columns=dataset.column_names)
+train_tokenized_dataset = train_dataset.map(format_example, remove_columns=dataset.column_names)
 val_tokenized_dataset = val_dataset.map(format_example, remove_columns=dataset.column_names)
 
 # --- GRPO Config ---
@@ -91,6 +98,7 @@ grpo_cfg = GRPOConfig(
     output_dir=OUTPUT_DIR,
     num_train_epochs=GRPO_CFG["training"]["epochs"],
     per_device_train_batch_size=GRPO_CFG["training"]["batch_size"],
+    per_device_eval_batch_size=GRPO_CFG["training"]["batch_size"],
     gradient_accumulation_steps=GRPO_CFG["training"]["gradient_accumulation_steps"],
     learning_rate=float(GRPO_CFG["training"]["learning_rate"]),
     max_prompt_length=GRPO_CFG["grpo"]["max_prompt_length"],
@@ -104,8 +112,11 @@ grpo_cfg = GRPOConfig(
     eval_steps=GRPO_CFG["training"]["eval_steps"],
     save_steps=GRPO_CFG["training"]["save_steps"],
     save_total_limit=GRPO_CFG["training"]["save_total_limit"],
-    bf16=torch.cuda.is_available(),
-    load_best_model_at_end=True
+    bf16=True,
+    tf32=True,
+    load_best_model_at_end=True,
+    reward_weights=reward_weights,
+    chat_template_kwargs={"enable_thinking": False}
 )
 
 # --- GRPO Trainer ---
@@ -130,8 +141,13 @@ scheduler = get_cosine_with_min_lr_schedule_with_warmup(
 )
 trainer.lr_scheduler = scheduler
 
+checkpoints = [d for d in os.listdir(OUTPUT_DIR) if d.startswith("checkpoint")]
+checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+last_checkpoint = os.path.join(OUTPUT_DIR, checkpoints[-1])
+print("Resuming from:", last_checkpoint)
+
 # --- Train ---
-trainer.train()
+trainer.train(resume_from_checkpoint=last_checkpoint)
 
 # --- Save model ---
 trainer.save_model(OUTPUT_DIR)

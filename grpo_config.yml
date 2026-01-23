@@ -1,0 +1,58 @@
+model:
+  name: "sft-cot-model"
+
+training:
+  output_dir: "./grpo-cot-model"
+  learning_rate: 1e-6
+  min_lr_rate: 0.1
+  batch_size: 8
+  epochs: 2
+  weight_decay: 0.01
+  gradient_accumulation_steps: 2
+  logging_steps: 30
+  eval_steps: 150
+  save_steps: 150
+  save_total_limit: 2
+  warmup_ratio: 0.05
+
+grpo:
+  num_generations: 4
+  max_prompt_length: 1024
+  max_completion_length: 3096
+  temperature: 0.7
+  top_p: 0.9
+
+  reward_funcs:
+    # "accuracy": 2.0
+    # "format"
+    # "tag_count"
+    # "reasoning_steps": 0.5
+    length: 0.3
+    cosine: 2.0
+    repetition_penalty: 0.1
+
+  # Tham số reward nâng cao
+  cosine_min_value_wrong: 0.0
+  cosine_max_value_wrong: -0.5
+  cosine_min_value_correct: 0.5
+  cosine_max_value_correct: 1.0
+  cosine_max_len: 1504 
+
+  repetition_n_grams: 3
+  repetition_max_penalty: -0.5
+
+lora:
+  using_lora: False
+  r: 32
+  lora_alpha: 64
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+  lora_dropout: 0.05
+  bias: "none"
+
+dataset:
+  train_path: "./data/val.json"
+  val_ratio: 0.05

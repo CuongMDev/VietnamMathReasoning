@@ -14,8 +14,9 @@ def make_prompt_template(user_prompt: str, think=None, respond=None, boxed_force
     if add_system:
         messages.append({
             "role": "system",
-            "content": "You are a helpful and harmless assistant. " 
+            "content": "You are a helpful and harmless assistant. "
                        "You are Qwen developed by Alibaba. "
+                       "You are an expert in calculus (limits, derivatives, integrals, differential equations). "
         })
         if boxed_force:
             messages[-1]["content"] += "Please reason step by step, and put your final answer within \\boxed{}. The \\boxed{} should contain ONLY the final answer (number, expression, or value) without any explanation or units unless the problem specifically asks for it."

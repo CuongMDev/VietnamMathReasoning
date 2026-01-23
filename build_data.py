@@ -10,6 +10,7 @@ from datasets import load_dataset
 
 from config import DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, SFT_CFG
 from filter import clean_reasoning, is_low_quality, is_good_thinking, is_step_by_step, process_mcq
+from filter_calculus import has_calculus_keywords
 from utils import extract_boxed, make_prompt_template, remove_all_tags, remove_tags
 
 random.seed(42)
@@ -44,8 +45,9 @@ def add_dataset(
     boxed_force=True,
     remove_answer_special_tags_list: list = None,
     max_think_segment_chars=None,
-    diversify_key=None, 
-    max_per_group=50
+    diversify_key=None,
+    max_per_group=50,
+    filter_calculus=False
 ):
     print(f"📥 Loading {path}...")
     ds = load_dataset(path, subset, split=split, cache_dir=DATA_CACHE_PATH, streaming=streaming)
@@ -53,15 +55,12 @@ def add_dataset(
         ds = ds.take(max_data_samples)
     ds = ds.shuffle(seed=3407)
 
-    if n_samples is None:
-        n_samples = len(ds)
-
     candidates = []
 
     seen_groups = defaultdict(int)
 
     for ex in ds:
-        if not length_sampling and len(candidates) >= n_samples:
+        if n_samples is not None and not length_sampling and len(candidates) >= n_samples:
             break
         # --- giới hạn max_candidates ---
         if max_candidates is not None and len(candidates) >= max_candidates:
@@ -89,6 +88,10 @@ def add_dataset(
             a = a[0]
         
         if not q:
+            continue
+
+        # Filter calculus data (bỏ qua bài toán calculus)
+        if filter_calculus and has_calculus_keywords(q):
             continue
 
         if correct_key is not None:
@@ -211,14 +214,16 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
         answer_key="</think>",
         think_key="generated_solution",
         max_token=2700,
-        n_samples=50000,
+        min_token=1000,
+        # n_samples=10000,
         streaming=True,
-        max_candidates=100000,
-        length_sampling=False,
-        max_data_samples=3000000,
+        # max_candidates=100000,
+        # length_sampling=False,
+        # max_data_samples=3000000,
         # max_think_segment_chars=400,
-        diversify_key="problem_source",
-        max_per_group=17000
+        # diversify_key="problem_source",
+        # max_per_group=40000
+        filter_calculus=True
     )
 
     add_dataset(
@@ -229,12 +234,14 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
         subset='v0',
         think_key="reannotated_assistant_content",
         max_token=2700,
-        n_samples=5000,
-        max_candidates=10000,
-        length_sampling=True,
+        min_token=1000,
+        # n_samples=5000,
+        # max_candidates=10000,
+        # length_sampling=True,
         # max_think_segment_chars=300,
-        diversify_key="source", 
-        max_per_group=2500,
+        # diversify_key="source", 
+        # max_per_group=2500,
+        filter_calculus=True
     )
 
     # add_dataset(
@@ -285,7 +292,7 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
     #     remove_answer_special_tags_list=["think", "answer"]
     # )
 
-    random.shuffle(data)
+    # random.shuffle(data)
     total = len(data)
 
     train_end = int((1 - test_ratio) * total)
