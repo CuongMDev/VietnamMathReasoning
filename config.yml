@@ -9,9 +9,9 @@ training:
   epochs: 5
   weight_decay: 0.01
   gradient_accumulation_steps: 32
-  logging_steps: 50
-  eval_steps: 350
-  save_steps: 350
+  logging_steps: 40
+  eval_steps: 260
+  save_steps: 260
   save_total_limit: 2
   warmup_ratio: 0.03
 
@@ -29,5 +29,6 @@ lora:
 
 dataset:
   train_path: "/train_calculus.json"
-  val_ratio: 0.015
-  test_ratio: 0.03
+  val_ratio: 0.017
+  test_ratio: 0.032
+  grpo_ratio: 0.17

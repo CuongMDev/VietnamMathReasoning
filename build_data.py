@@ -90,8 +90,8 @@ def add_dataset(
         if not q:
             continue
 
-        # Filter calculus data (bỏ qua bài toán calculus)
-        if filter_calculus and has_calculus_keywords(q):
+        # Filter calculus data (lọc bài toán calculus)
+        if filter_calculus and not has_calculus_keywords(q):
             continue
 
         if correct_key is not None:
@@ -189,7 +189,7 @@ def add_dataset(
     print(f"Dataset {path} has {len(candidates)} samples")
 
 
-def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
+def build_small_math_reasoning(output_dir="."):
     data = []
 
     # add_dataset(
@@ -213,7 +213,7 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
         split="cot",
         answer_key="</think>",
         think_key="generated_solution",
-        max_token=2700,
+        max_token=2900,
         min_token=1000,
         # n_samples=10000,
         streaming=True,
@@ -292,23 +292,11 @@ def build_small_math_reasoning(output_dir=".", test_ratio=0.1):
     #     remove_answer_special_tags_list=["think", "answer"]
     # )
 
-    # random.shuffle(data)
-    total = len(data)
-
-    train_end = int((1 - test_ratio) * total)
-    splits = {
-        "train": data[:train_end],
-        **({ "test": data[train_end:]} if train_end < total else {})
-    }
-
     os.makedirs(output_dir, exist_ok=True)
-    for split_name, split_data in splits.items():
-        path = os.path.join(output_dir, f"{split_name}.json")
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(split_data, f, ensure_ascii=False, indent=2)
-        print(f"✅ Saved {len(split_data)} samples to {path}")
-
-    print(f"\n🏁 Done! Total: {total} samples")
+    path = os.path.join(output_dir, "calculus_data_raw.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+    print(f"✅ Saved {len(data)} samples to {path}")
 
 def build_test_math(output_dir="."):
     data = []
@@ -333,5 +321,5 @@ def build_test_math(output_dir="."):
 
 
 if __name__ == "__main__":
-    build_small_math_reasoning(output_dir=INSTRUCTION_DATA_PATH, test_ratio=0)
+    build_small_math_reasoning(output_dir=INSTRUCTION_DATA_PATH)
     # build_test_math(output_dir=INSTRUCTION_DATA_PATH)

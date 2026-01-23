@@ -27,16 +27,17 @@ CALCULUS_KEYWORDS_EN = [
     # Derivatives
     r"\bderivative\b", r"\bdifferentiate\b", r"\bdifferentiation\b",
     r"f'\(", r"f''", r"dy/dx", r"d/dx", r"\\frac\{d", r"\\partial",
-    # Integrals
-    r"\bintegral\b", r"\bintegrate\b", r"\bintegration\b",
+    # Integrals (exclude "integral number/part" = whole number)
+    r"\bintegral\b(?!\s+(?:number|part|value))", r"\bintegrate\b", r"\bintegration\b",
     r"\\int", r"antiderivative", r"primitive",
     # Series
     r"convergent", r"divergent",
     r"taylor", r"maclaurin", r"\\sum.*n=",
     # Differential equations
     r"differential equation", r"\bODE\b", r"\bPDE\b",
-    # Continuity
-    r"\bcontinuous\b", r"\bcontinuity\b", r"discontinuous",
+    # Continuity (require math context)
+    r"\bcontinuous\b(?=\s*(?:\(|function|at|on|over|from|if|and\s+differentiable))",
+    r"\bcontinuity\b", r"discontinuous",
     # Function analysis
     r"critical point", r"inflection", r"concav", r"extrema",
     r"maximum.*function", r"minimum.*function", r"monoton",
@@ -55,6 +56,15 @@ def has_calculus_keywords(text: str) -> bool:
     for pattern in CALCULUS_PATTERNS:
         if re.search(pattern, text_lower, re.IGNORECASE):
             return True
+    return False
+
+
+def is_duplicate(text: str, seen: set) -> bool:
+    """Check if text is duplicate (and add to seen set if not)."""
+    normalized = text.strip().lower()
+    if normalized in seen:
+        return True
+    seen.add(normalized)
     return False
 
 
@@ -206,7 +216,8 @@ def filter_calculus_data(
     classifier: AIClassifier,
     problem_key: str = "problem",
     batch_size: int = 100,
-    save_rejected: bool = False
+    save_rejected: bool = False,
+    filter_duplicates: bool = True
 ):
     """
     Filter calculus problems from a JSON dataset.
@@ -227,6 +238,8 @@ def filter_calculus_data(
 
     calculus_data = []
     other_data = []
+    seen = set()
+    duplicate_count = 0
 
     # Process in batches
     for i in tqdm(range(0, len(data), batch_size), desc="Processing batches"):
@@ -239,8 +252,13 @@ def filter_calculus_data(
         else:
             results = classifier.classify_batch(problems)
 
-        for item, is_calculus in zip(batch, results):
-            if is_calculus:
+        for item, is_calc in zip(batch, results):
+            problem = item.get(problem_key, "")
+            # Filter duplicates
+            if filter_duplicates and is_duplicate(problem, seen):
+                duplicate_count += 1
+                continue
+            if is_calc:
                 calculus_data.append(item)
             else:
                 other_data.append(item)
@@ -248,6 +266,8 @@ def filter_calculus_data(
     # Save filtered data
     print(f"\n✅ Calculus samples: {len(calculus_data)}")
     print(f"❌ Other samples: {len(other_data)}")
+    if filter_duplicates:
+        print(f"🔄 Duplicates removed: {duplicate_count}")
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(calculus_data, f, ensure_ascii=False, indent=2)
@@ -270,7 +290,8 @@ def filter_calculus_from_hf_dataset(
     subset: Optional[str] = None,
     split: str = "train",
     max_samples: Optional[int] = None,
-    streaming: bool = True
+    streaming: bool = True,
+    filter_duplicates: bool = True
 ):
     """
     Filter calculus problems directly from a HuggingFace dataset.
@@ -285,13 +306,21 @@ def filter_calculus_from_hf_dataset(
         ds = ds.take(max_samples)
 
     calculus_data = []
+    seen = set()
+    duplicate_count = 0
 
     for ex in tqdm(ds, desc="Filtering"):
         problem = ex.get(problem_key, "")
+        # Filter duplicates
+        if filter_duplicates and is_duplicate(problem, seen):
+            duplicate_count += 1
+            continue
         if classifier.classify(problem):
             calculus_data.append(dict(ex))
 
     print(f"\n✅ Found {len(calculus_data)} calculus samples")
+    if filter_duplicates:
+        print(f"🔄 Duplicates removed: {duplicate_count}")
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(calculus_data, f, ensure_ascii=False, indent=2)
@@ -324,8 +353,8 @@ if __name__ == "__main__":
     # )
 
     # Filter from local JSON file
-    input_file = "./data/train.json"
-    output_file = "./data/train_calculus.json"
+    input_file = "./data/calculus_data_raw.json"
+    output_file = "./data/calculus_data.json"
 
     if os.path.exists(input_file):
         filter_calculus_data(
@@ -333,7 +362,8 @@ if __name__ == "__main__":
             output_path=output_file,
             classifier=classifier,
             problem_key="problem",
-            save_rejected=True
+            save_rejected=True,
+            filter_duplicates=False
         )
     else:
         print(f"⚠️ Input file not found: {input_file}")

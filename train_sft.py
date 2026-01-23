@@ -27,9 +27,6 @@ BATCH_SIZE: int = int(SFT_CFG["training"]["batch_size"])
 EPOCHS: int = int(SFT_CFG["training"]["epochs"])
 
 LORA_CONFIG: dict = dict(SFT_CFG["lora"])
-TRAIN_PATH: str = str(SFT_CFG["dataset"]["train_path"])
-VAL_RATIO: float = float(SFT_CFG["dataset"]["val_ratio"])
-TEST_RATIO: float = float(SFT_CFG["dataset"]["test_ratio"])
 
 # --- Load tokenizer ---
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
@@ -58,93 +55,12 @@ if bool(LORA_CONFIG["using_lora"]):
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-# --- Load dataset ---
-dataset = load_dataset("json", data_files=INSTRUCTION_DATA_PATH+TRAIN_PATH)["train"]
+# --- Load dataset (pre-split by split_data.py) ---
+train_dataset = load_dataset("json", data_files=INSTRUCTION_DATA_PATH + "train.json")["train"]
+val_dataset = load_dataset("json", data_files=INSTRUCTION_DATA_PATH + "val.json")["train"]
 
-# Add think_len for sorting by difficulty
-def add_think_len(example):
-    think = example.get('think', '') or ''
-    return {"think_len": len(think)}
+print(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}")
 
-dataset = dataset.map(add_think_len)
-
-# Sort entire dataset by think_len (easy -> hard)
-dataset = dataset.sort("think_len")
-
-# Two-stage split: train/val_test, then val_test -> val/test
-VAL_TEST_RATIO = VAL_RATIO + TEST_RATIO
-
-n_total = len(dataset)
-n_val_test = int(n_total * VAL_TEST_RATIO)
-step = n_total / n_val_test
-
-# Stage 1: Select val_test evenly spaced across difficulty
-val_test_indices = [int(i * step) for i in range(n_val_test)]
-train_indices = [i for i in range(n_total) if i not in set(val_test_indices)]
-
-train_dataset = dataset.select(train_indices)
-val_test_dataset = dataset.select(val_test_indices)  # sorted by difficulty
-
-# Stage 2: Split val_test into val and test
-# Val: evenly spaced, Test: remaining
-n_val_test = len(val_test_dataset)
-n_val = int(n_val_test * (VAL_RATIO / VAL_TEST_RATIO))
-
-# Select val evenly spaced across val_test
-val_step = n_val_test / n_val
-val_indices = [int(i * val_step) for i in range(n_val)]
-val_indices_set = set(val_indices)
-
-# Test takes the rest
-test_indices = [i for i in range(n_val_test) if i not in val_indices_set]
-
-val_dataset = val_test_dataset.select(val_indices)
-test_dataset = val_test_dataset.select(test_indices)
-
-# Remove helper column
-train_dataset = train_dataset.remove_columns(["think_len"])
-val_dataset = val_dataset.remove_columns(["think_len"])
-test_dataset = test_dataset.remove_columns(["think_len"])
-
-print(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}, Test: {len(test_dataset)} (evenly spaced by difficulty)")
-
-# Save as JSON with proper formatting
-import json
-with open("data/val.json", "w", encoding="utf-8") as f:
-    json.dump(list(val_dataset), f, ensure_ascii=False, indent=2)
-with open("data/test.json", "w", encoding="utf-8") as f:
-    json.dump(list(test_dataset), f, ensure_ascii=False, indent=2)
-
-# split_ratio = 0.7
-# # Tách dataset
-# train_normal, train_flip = train_dataset.train_test_split(
-#     test_size=1 - split_ratio,
-#     seed=42
-# ).values()
-# val_normal, val_flip = val_dataset.train_test_split(
-#     test_size=1 - split_ratio,
-#     seed=42
-# ).values()
-# # Flip function (English prompt)
-# def flip_example(example):
-#     new_problem = f"Please generate a question that would have the following answer:\n\n{example['response']}"
-#     new_response = example["problem"]
-#     return {
-#         "problem": new_problem,
-#         "response": new_response,
-#         "boxed_force": False
-#     }
-# # Áp dụng đổi chỗ
-# train_flip = train_flip.map(flip_example)
-# val_flip = val_flip.map(flip_example)
-# # Ghép lại
-# train_dataset = concatenate_datasets([train_normal, train_flip])
-# val_dataset = concatenate_datasets([val_normal, val_flip])
-# Shuffle cuối
-
-# val_no_response = val_dataset.remove_columns(["response"])
-# val_no_think = val_dataset.remove_columns(["think"])
-# val_dataset = concatenate_datasets([val_no_response, val_no_think])
 IGNORE_TOKEN_ID = -100
 
 def format_example(example, mask=True):
