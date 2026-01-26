@@ -68,6 +68,11 @@ def is_duplicate(text: str, seen: set) -> bool:
     return False
 
 
+def has_boxed_answer(response: str) -> bool:
+    """Check if response contains \\boxed{} answer."""
+    return '\\boxed' in (response or '')
+
+
 # ==================== AI CLASSIFICATION ====================
 
 SYSTEM_PROMPT = """You are Qwen, created by Alibaba Cloud. You are a helpful assistant. You are a math topic classifier. Your task is to determine if a math problem belongs to CALCULUS.
@@ -215,9 +220,11 @@ def filter_calculus_data(
     output_path: str,
     classifier: AIClassifier,
     problem_key: str = "problem",
+    response_key: str = "response",
     batch_size: int = 100,
     save_rejected: bool = False,
-    filter_duplicates: bool = True
+    filter_duplicates: bool = True,
+    filter_boxed: bool = True
 ):
     """
     Filter calculus problems from a JSON dataset.
@@ -227,8 +234,10 @@ def filter_calculus_data(
         output_path: Path to save filtered data
         classifier: AIClassifier instance
         problem_key: Key containing the problem text
+        response_key: Key containing the response text
         batch_size: Number of problems to classify in each batch
         save_rejected: Whether to save rejected problems to a separate file
+        filter_boxed: Whether to filter out samples without \\boxed in response
     """
     print(f"📂 Loading data from {input_path}...")
     with open(input_path, "r", encoding="utf-8") as f:
@@ -240,6 +249,7 @@ def filter_calculus_data(
     other_data = []
     seen = set()
     duplicate_count = 0
+    no_boxed_count = 0
 
     # Process in batches
     for i in tqdm(range(0, len(data), batch_size), desc="Processing batches"):
@@ -254,9 +264,14 @@ def filter_calculus_data(
 
         for item, is_calc in zip(batch, results):
             problem = item.get(problem_key, "")
+            response = item.get(response_key, "")
             # Filter duplicates
             if filter_duplicates and is_duplicate(problem, seen):
                 duplicate_count += 1
+                continue
+            # Filter boxed
+            if filter_boxed and not has_boxed_answer(response):
+                no_boxed_count += 1
                 continue
             if is_calc:
                 calculus_data.append(item)
@@ -268,6 +283,8 @@ def filter_calculus_data(
     print(f"❌ Other samples: {len(other_data)}")
     if filter_duplicates:
         print(f"🔄 Duplicates removed: {duplicate_count}")
+    if filter_boxed:
+        print(f"📦 No boxed removed: {no_boxed_count}")
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(calculus_data, f, ensure_ascii=False, indent=2)
@@ -287,11 +304,13 @@ def filter_calculus_from_hf_dataset(
     output_path: str,
     classifier: AIClassifier,
     problem_key: str = "problem",
+    response_key: str = "response",
     subset: Optional[str] = None,
     split: str = "train",
     max_samples: Optional[int] = None,
     streaming: bool = True,
-    filter_duplicates: bool = True
+    filter_duplicates: bool = True,
+    filter_boxed: bool = True
 ):
     """
     Filter calculus problems directly from a HuggingFace dataset.
@@ -308,12 +327,18 @@ def filter_calculus_from_hf_dataset(
     calculus_data = []
     seen = set()
     duplicate_count = 0
+    no_boxed_count = 0
 
     for ex in tqdm(ds, desc="Filtering"):
         problem = ex.get(problem_key, "")
+        response = ex.get(response_key, "")
         # Filter duplicates
         if filter_duplicates and is_duplicate(problem, seen):
             duplicate_count += 1
+            continue
+        # Filter boxed
+        if filter_boxed and not has_boxed_answer(response):
+            no_boxed_count += 1
             continue
         if classifier.classify(problem):
             calculus_data.append(dict(ex))
@@ -321,6 +346,8 @@ def filter_calculus_from_hf_dataset(
     print(f"\n✅ Found {len(calculus_data)} calculus samples")
     if filter_duplicates:
         print(f"🔄 Duplicates removed: {duplicate_count}")
+    if filter_boxed:
+        print(f"📦 No boxed removed: {no_boxed_count}")
 
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(calculus_data, f, ensure_ascii=False, indent=2)

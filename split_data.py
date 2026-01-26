@@ -1,7 +1,6 @@
 """
 Split data into train/val/test/grpo sets.
-- Val/Test: unique questions only (no duplicates)
-- Train: remaining samples (can include duplicates)
+- All sets: unique questions only (no duplicates)
 - GRPO: sampled with log distribution, prioritizing longer think
 """
 
@@ -28,9 +27,10 @@ def split_data(
 ):
     """
     Split data into train/val/test/grpo sets.
-    - Val/Test: unique questions (filter duplicates), evenly spaced by difficulty
-    - Train: remaining samples (can include duplicates)
+    - All sets: unique questions only
+    - Val/Test: evenly spaced by difficulty
     - GRPO: sampled with log distribution, prioritizing longer think
+    - Train: remaining unique questions
     """
     # Load dataset
     dataset = load_dataset("json", data_files=input_path)["train"]
@@ -118,16 +118,20 @@ def split_data(
     else:
         grpo_indices = []
 
-    # Step 7: Get GRPO problems, then Train = all samples NOT in val/test/grpo
+    # Step 7: Get GRPO problems
     grpo_problems = set()
     for idx in grpo_indices:
         grpo_problems.add(dataset[idx]['problem'].strip().lower())
 
+    # Step 8: Train = all samples NOT in val/test/grpo, then dedupe
     train_indices = []
+    train_seen = set()
     for i, example in enumerate(dataset):
         problem = example.get('problem', '').strip().lower()
         if problem not in val_problems and problem not in test_problems and problem not in grpo_problems:
-            train_indices.append(i)
+            if problem not in train_seen:
+                train_seen.add(problem)
+                train_indices.append(i)
 
     # Select datasets
     train_dataset = dataset.select(train_indices)

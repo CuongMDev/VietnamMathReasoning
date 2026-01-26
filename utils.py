@@ -48,27 +48,20 @@ def make_prompt_template(user_prompt: str, think=None, respond=None, boxed_force
 # 🔢 Hàm trích xuất kết quả trong \boxed{...}
 def extract_boxed(s: str):
     start = s.rfind(r"\boxed{")
-    if start != -1:
-        start += len(r"\boxed{")
-        depth = 1
-        i = start
-        while i < len(s) and depth > 0:
-            if s[i] == "{":
-                depth += 1
-            elif s[i] == "}":
-                depth -= 1
-            i += 1
-        content = s[start:i-1].strip()
-        return content
-
-    eq_match = re.search(r"=\s*([^\n]*)$", s)
-    if eq_match:
-        return eq_match.group(1).strip()
-
-    lines = [line.strip() for line in s.splitlines() if line.strip()]
-    if lines:
-        return lines[-1]
-    return "?"
+    if start == -1:
+        return ""
+    
+    start += len(r"\boxed{")
+    depth = 1
+    i = start
+    while i < len(s) and depth > 0:
+        if s[i] == "{":
+            depth += 1
+        elif s[i] == "}":
+            depth -= 1
+        i += 1
+    content = s[start:i-1].strip()
+    return content
 
 def extract_after_equals(s: str) -> str:
     """Extract the part after '=' if present, otherwise return original string."""
@@ -76,32 +69,19 @@ def extract_after_equals(s: str) -> str:
         return s.split('=')[-1].strip()
     return s.strip()
 
-def is_answer_equal(pred: str, gt: str) -> bool:
+def is_answer_equal(pred: str, gt: str, ignore_not_parseable=False) -> bool:
     # Extract part after '=' if present
     pred = extract_after_equals(pred)
     gt = extract_after_equals(gt)
 
-    pred = f"\\boxed{{{pred}}}"
-    gt = f"\\boxed{{{gt}}}"
+    pred = f"${pred}$"
+    gt = f"${gt}$"
     gold_parsed = parse(gt, extraction_mode="first_match", extraction_config=[LatexExtractionConfig()])
-    answer_parsed = parse(
-        pred,
-        extraction_config=[
-            LatexExtractionConfig(
-                normalization_config=NormalizationConfig(
-                    nits=False,
-                    malformed_operators=False,
-                    basic_latex=True,
-                    equations=True,
-                    boxed=True,
-                    units=True,
-                ),
-                boxed_match_priority=0,
-                try_extract_without_anchor=False,
-            )
-        ],
-        extraction_mode="first_match",
-    )
+    print("Gold parsed:", gold_parsed)
+    if len(gold_parsed) == 0 and ignore_not_parseable:
+        return True
+        
+    answer_parsed = parse(pred, extraction_mode="first_match", extraction_config=[LatexExtractionConfig()])
 
     is_correct = verify(answer_parsed, gold_parsed)
     return is_correct

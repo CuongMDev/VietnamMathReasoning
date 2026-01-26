@@ -7,7 +7,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, get_cosine_with_mi
 from trl import GRPOTrainer, GRPOConfig
 import os
 
-from config import GRPO_CFG, MODEL_CACHE_PATH
+from config import GRPO_CFG, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH
 from utils import make_prompt_template
 from reward import *
 
@@ -43,14 +43,9 @@ if LORA_CONFIG["using_lora"]:
     model = get_peft_model(model, lora_config)
     model.print_trainable_parameters()
 
-VAL_RATIO: float = float(GRPO_CFG["dataset"]["val_ratio"])
-
-# --- Load dataset ---
-dataset = load_dataset("json", data_files=GRPO_CFG["dataset"]["train_path"])["train"]
-# Train/Val split ban đầu
-dataset_split = dataset.train_test_split(test_size=VAL_RATIO, seed=42)
-train_dataset = dataset_split["train"]
-val_dataset = dataset_split["test"]
+# --- Load dataset (pre-split by split_data.py) ---
+train_dataset = load_dataset("json", data_files=INSTRUCTION_DATA_PATH + "train.json")["train"]
+val_dataset = load_dataset("json", data_files=INSTRUCTION_DATA_PATH + "val.json")["train"]
 
 # --- Combined reward function ---
 REWARD_FUNCS_REGISTRY = {
@@ -68,8 +63,14 @@ REWARD_FUNCS_REGISTRY = {
         ngram_size=GRPO_CFG["grpo"]["repetition_n_grams"],
         max_penalty=GRPO_CFG["grpo"]["repetition_max_penalty"],
     ),
+    "cosine_word": get_cosine_backtracking_scaled_reward(
+        min_value_wrong=GRPO_CFG["grpo"]["cosine_min_value_wrong"],
+        max_value_wrong=GRPO_CFG["grpo"]["cosine_max_value_wrong"],
+        min_value_correct=GRPO_CFG["grpo"]["cosine_min_value_correct"],
+        max_value_correct=GRPO_CFG["grpo"]["cosine_max_value_correct"],
+        max_word=GRPO_CFG["grpo"]["cosine_max_word"],
+    ),
     "length": len_reward,
-    "tag_count": tag_count_reward,
 }
 
 reward_funcs = [
@@ -86,11 +87,11 @@ def format_example(example):
 
     return {
         "prompt": messages,
-        "solution": f'${answer}$'
+        "solution": answer
     }
 
-train_tokenized_dataset = train_dataset.map(format_example, remove_columns=dataset.column_names)
-val_tokenized_dataset = val_dataset.map(format_example, remove_columns=dataset.column_names)
+train_tokenized_dataset = train_dataset.map(format_example, remove_columns=train_dataset.column_names)
+val_tokenized_dataset = val_dataset.map(format_example, remove_columns=val_dataset.column_names)
 
 # --- GRPO Config ---
 OUTPUT_DIR = GRPO_CFG["training"]["output_dir"]
@@ -101,7 +102,6 @@ grpo_cfg = GRPOConfig(
     per_device_eval_batch_size=GRPO_CFG["training"]["batch_size"],
     gradient_accumulation_steps=GRPO_CFG["training"]["gradient_accumulation_steps"],
     learning_rate=float(GRPO_CFG["training"]["learning_rate"]),
-    max_prompt_length=GRPO_CFG["grpo"]["max_prompt_length"],
     max_completion_length=GRPO_CFG["grpo"]["max_completion_length"],
     num_generations=GRPO_CFG["grpo"]["num_generations"],  # số generation cho mỗi prompt
     temperature=GRPO_CFG["grpo"]["temperature"],
@@ -116,7 +116,7 @@ grpo_cfg = GRPOConfig(
     tf32=True,
     load_best_model_at_end=True,
     reward_weights=reward_weights,
-    chat_template_kwargs={"enable_thinking": False}
+    # chat_template_kwargs={"enable_thinking": False}
 )
 
 # --- GRPO Trainer ---
@@ -141,13 +141,13 @@ scheduler = get_cosine_with_min_lr_schedule_with_warmup(
 )
 trainer.lr_scheduler = scheduler
 
-checkpoints = [d for d in os.listdir(OUTPUT_DIR) if d.startswith("checkpoint")]
-checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
-last_checkpoint = os.path.join(OUTPUT_DIR, checkpoints[-1])
-print("Resuming from:", last_checkpoint)
+# checkpoints = [d for d in os.listdir(OUTPUT_DIR) if d.startswith("checkpoint")]
+# checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]))
+# last_checkpoint = os.path.join(OUTPUT_DIR, checkpoints[-1])
+# print("Resuming from:", last_checkpoint)
 
 # --- Train ---
-trainer.train(resume_from_checkpoint=last_checkpoint)
+trainer.train()
 
 # --- Save model ---
 trainer.save_model(OUTPUT_DIR)
