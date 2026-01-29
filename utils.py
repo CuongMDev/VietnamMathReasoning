@@ -77,7 +77,6 @@ def is_answer_equal(pred: str, gt: str, ignore_not_parseable=False) -> bool:
     pred = f"${pred}$"
     gt = f"${gt}$"
     gold_parsed = parse(gt, extraction_mode="first_match", extraction_config=[LatexExtractionConfig()])
-    print("Gold parsed:", gold_parsed)
     if len(gold_parsed) == 0 and ignore_not_parseable:
         return True
         

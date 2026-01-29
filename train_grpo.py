@@ -1,11 +1,13 @@
+import os
+os.environ["WANDB_MODE"] = "offline"
+
 import random
 import numpy
 import torch
 from datasets import load_dataset
-from peft import LoraConfig, TaskType, get_peft_model
+from peft import LoraConfig, PeftModel, TaskType, get_peft_model
 from transformers import AutoTokenizer, AutoModelForCausalLM, get_cosine_with_min_lr_schedule_with_warmup
 from trl import GRPOTrainer, GRPOConfig
-import os
 
 from config import GRPO_CFG, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH
 from utils import make_prompt_template
@@ -32,15 +34,25 @@ model = AutoModelForCausalLM.from_pretrained(
 # --- LoRA ---
 LORA_CONFIG = GRPO_CFG["lora"]
 if LORA_CONFIG["using_lora"]:
-    lora_config = LoraConfig(
-        r=LORA_CONFIG["r"],
-        lora_alpha=LORA_CONFIG["lora_alpha"],
-        target_modules=LORA_CONFIG["target_modules"],
-        lora_dropout=LORA_CONFIG["lora_dropout"],
-        bias=LORA_CONFIG["bias"],
-        task_type=TaskType.CAUSAL_LM
-    )
-    model = get_peft_model(model, lora_config)
+    if "sft_model_path" in LORA_CONFIG:
+        sft_model_path = LORA_CONFIG["sft_model_path"]
+        print("Loading SFT model from:", sft_model_path)
+        model = PeftModel.from_pretrained(
+            model,
+            sft_model_path,
+            is_trainable=True   # QUAN TRỌNG
+        )
+    else:
+        lora_config = LoraConfig(
+            r=LORA_CONFIG["r"],
+            lora_alpha=LORA_CONFIG["lora_alpha"],
+            target_modules=LORA_CONFIG["target_modules"],
+            lora_dropout=LORA_CONFIG["lora_dropout"],
+            bias=LORA_CONFIG["bias"],
+            task_type=TaskType.CAUSAL_LM
+        )
+        model = get_peft_model(model, lora_config)
+
     model.print_trainable_parameters()
 
 # --- Load dataset (pre-split by split_data.py) ---
@@ -113,10 +125,13 @@ grpo_cfg = GRPOConfig(
     save_steps=GRPO_CFG["training"]["save_steps"],
     save_total_limit=GRPO_CFG["training"]["save_total_limit"],
     bf16=True,
-    tf32=True,
+    # tf32=True,
     load_best_model_at_end=True,
     reward_weights=reward_weights,
     # chat_template_kwargs={"enable_thinking": False}
+    use_vllm=GRPO_CFG["vllm"]["enabled"],
+    vllm_gpu_memory_utilization=GRPO_CFG["vllm"]["gpu_memory_utilization"],
+    vllm_mode="colocate",
 )
 
 # --- GRPO Trainer ---
