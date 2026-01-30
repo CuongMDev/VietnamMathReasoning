@@ -1,5 +1,6 @@
 """Reward functions for GRPO training."""
 
+import torch
 import math
 import re
 from typing import Dict
@@ -322,3 +323,50 @@ def get_repetition_penalty_reward(ngram_size: int, max_penalty: float):
         return rewards
 
     return repetition_penalty_reward
+
+def logprob_confidence_reward(completions, **kwargs):
+    """
+    Reward based on average token log-probability (model confidence).
+
+    Maps mean logprob from [-5, 0] -> [0, 1].
+
+    Higher confidence => higher reward.
+    """
+
+    rewards = []
+
+    for comp in completions:
+
+        # Handle TRL formats: [ {..} ] or {..}
+        if isinstance(comp, list):
+            c = comp[0]
+        elif isinstance(comp, dict):
+            c = comp
+        else:
+            rewards.append(0.0)
+            continue
+
+        logps = c.get("logprobs", None)
+
+        if logps is None or len(logps) == 0:
+            rewards.append(0.0)
+            continue
+
+        if not isinstance(logps, torch.Tensor):
+            logps = torch.tensor(logps)
+
+        # Important: detach from graph
+        logps = logps.detach()
+
+        # Mean token log-prob
+        avg_logp = logps.mean()
+
+        # Clamp for numerical stability
+        avg_logp = torch.clamp(avg_logp, -5.0, 0.0)
+
+        # Normalize [-5, 0] -> [0, 1]
+        reward = (avg_logp + 5.0) / 5.0
+
+        rewards.append(float(reward))
+
+    return rewards
