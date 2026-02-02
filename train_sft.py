@@ -9,9 +9,9 @@ from transformers.trainer_pt_utils import LabelSmoother
 
 from config import INSTRUCTION_DATA_PATH, SFT_CFG, MODEL_CACHE_PATH
 from mask import *
-from sft_loss import compute_threshold_loss, plot_token_loss_to_file
+from sft_loss import compute_threshold_loss, plot_token_loss_to_file, set_tokenizer
 from utils import make_prompt_template
-from AccuracyEvalCallback import AccuracyEvalCallback
+from Callback import AccuracyEvalCallback
 
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 random.seed(42)
@@ -31,6 +31,7 @@ LORA_CONFIG: dict = dict(SFT_CFG["lora"])
 # --- Load tokenizer ---
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
 tokenizer.padding_side = 'left'
+set_tokenizer(tokenizer)
 
 # --- Load model ---
 model = AutoModelForCausalLM.from_pretrained(
@@ -130,7 +131,7 @@ training_args = TrainingArguments(
     logging_steps=SFT_CFG["training"]["logging_steps"],
     eval_strategy="no",
     save_steps=SFT_CFG["training"]["save_steps"],
-    save_total_limit=SFT_CFG["training"]["save_total_limit"],
+    save_total_limit=1,
     report_to="tensorboard",
     logging_dir="./logs",
     warmup_ratio=SFT_CFG["training"]["warmup_ratio"],
@@ -154,6 +155,7 @@ accuracy_callback = AccuracyEvalCallback(
     eval_steps=SFT_CFG["training"]["eval_steps"],
     max_new_tokens=3064,
     batch_size=20,
+    top_k=SFT_CFG["training"]["save_total_limit"],
 )
 
 trainer = Trainer(
@@ -161,6 +163,7 @@ trainer = Trainer(
     args=training_args,
     train_dataset=train_tokenized_dataset,
     data_collator=data_collator,
+    # compute_loss_func=lambda outputs, labels, **kwargs: compute_threshold_loss(outputs, labels, **kwargs, gradient_accumulation_steps=training_args.gradient_accumulation_steps),
     callbacks=[accuracy_callback],
 )
 

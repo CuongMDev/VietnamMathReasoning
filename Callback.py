@@ -1,5 +1,7 @@
 # --- TrainerCallback for accuracy evaluation ---
 
+import os
+import shutil
 from tqdm import tqdm
 from transformers import TrainerCallback
 from utils import extract_boxed, is_answer_equal, make_prompt_template
@@ -9,13 +11,15 @@ from generate_answers import generate_answers
 class AccuracyEvalCallback(TrainerCallback):
     """Callback to compute accuracy by generating answers during evaluation."""
 
-    def __init__(self, val_dataset_raw, tokenizer, model, eval_steps, max_new_tokens=3064, batch_size=4):
+    def __init__(self, val_dataset_raw, tokenizer, model, eval_steps, max_new_tokens=3064, batch_size=4, top_k=2):
         self.val_dataset_raw = val_dataset_raw  # Raw dataset with problem, answer fields
         self.tokenizer = tokenizer
         self.model = model
         self.eval_steps = eval_steps
         self.max_new_tokens = max_new_tokens
         self.batch_size = batch_size
+        self.top_k = top_k
+        self.best_results = []  # list of (accuracy, step, save_dir)
         self.best_accuracy = 0.0
         self.best_step = 0
 
@@ -77,11 +81,56 @@ class AccuracyEvalCallback(TrainerCallback):
             "eval_avg_token_count": avg_token_count,
         })
 
-        # Track best model
+        # Track top-k best models
+        save_dir = os.path.join(args.output_dir, f"best_model_step_{state.global_step}")
+
+        if len(self.best_results) < self.top_k:
+            self.model.save_pretrained(save_dir)
+            self.tokenizer.save_pretrained(save_dir)
+            self.best_results.append((accuracy, state.global_step, save_dir))
+            self.best_results.sort(key=lambda x: x[0])
+            print(f"[Step {state.global_step}] Accuracy: {accuracy:.4f}, saved at: {save_dir}")
+        elif accuracy > self.best_results[0][0]:
+            _, _, worst_dir = self.best_results.pop(0)
+            if os.path.exists(worst_dir):
+                shutil.rmtree(worst_dir)
+            self.model.save_pretrained(save_dir)
+            self.tokenizer.save_pretrained(save_dir)
+            self.best_results.append((accuracy, state.global_step, save_dir))
+            self.best_results.sort(key=lambda x: x[0])
+            print(f"[Step {state.global_step}] New top-{self.top_k} Accuracy: {accuracy:.4f}, saved at: {save_dir}")
+
         if accuracy > self.best_accuracy:
             self.best_accuracy = accuracy
             self.best_step = state.global_step
-            print(f"[New Best] Accuracy: {accuracy:.4f} at step {state.global_step}")
-            # Save best model
-            self.model.save_pretrained(f"{args.output_dir}/best_model")
-            self.tokenizer.save_pretrained(f"{args.output_dir}/best_model")
+
+class RewardsEvalCallback(TrainerCallback):
+    def __init__(self, metric_name="reward", top_k=3):
+        self.metric_name = metric_name
+        self.top_k = top_k
+        self.best_rewards = []  # list of (reward, save_dir)
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        if logs is None:
+            return
+        current_reward = logs.get(self.metric_name)
+        if current_reward is None:
+            return
+
+        save_dir = os.path.join(args.output_dir, f"best_model_step_{state.global_step}")
+
+        if len(self.best_rewards) < self.top_k:
+            kwargs["model"].save_pretrained(save_dir)
+            kwargs["processing_class"].save_pretrained(save_dir)
+            self.best_rewards.append((current_reward, save_dir))
+            self.best_rewards.sort(key=lambda x: x[0])
+            print(f"[Step {state.global_step}] {self.metric_name}: {current_reward:.4f}, saved at: {save_dir}")
+        elif current_reward > self.best_rewards[0][0]:
+            worst_reward, worst_dir = self.best_rewards.pop(0)
+            if os.path.exists(worst_dir):
+                shutil.rmtree(worst_dir)
+            kwargs["model"].save_pretrained(save_dir)
+            kwargs["processing_class"].save_pretrained(save_dir)
+            self.best_rewards.append((current_reward, save_dir))
+            self.best_rewards.sort(key=lambda x: x[0])
+            print(f"[Step {state.global_step}] New top-{self.top_k} {self.metric_name}: {current_reward:.4f}, saved at: {save_dir}")

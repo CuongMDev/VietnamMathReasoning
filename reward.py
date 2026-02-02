@@ -231,7 +231,7 @@ def get_cosine_backtracking_scaled_reward(
     max_word: int = 20,
 ):
     
-    def cosine_scaled_reward(completions, solution, **kwargs):
+    def cosine_backtracking_scaled_reward(completions, solution, **kwargs):
         """Reward function that scales based on completion length using a cosine schedule.
 
         Shorter correct solutions are rewarded more than longer ones.
@@ -273,7 +273,7 @@ def get_cosine_backtracking_scaled_reward(
 
         return rewards
 
-    return cosine_scaled_reward
+    return cosine_backtracking_scaled_reward
 
 
 def get_repetition_penalty_reward(ngram_size: int, max_penalty: float):

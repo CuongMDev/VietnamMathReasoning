@@ -69,11 +69,7 @@ def extract_after_equals(s: str) -> str:
         return s.split('=')[-1].strip()
     return s.strip()
 
-def is_answer_equal(pred: str, gt: str, ignore_not_parseable=False) -> bool:
-    # Extract part after '=' if present
-    pred = extract_after_equals(pred)
-    gt = extract_after_equals(gt)
-
+def __is_answer_equal(pred: str, gt: str, ignore_not_parseable=False) -> bool:
     pred = f"${pred}$"
     gt = f"${gt}$"
     gold_parsed = parse(gt, extraction_mode="first_match", extraction_config=[LatexExtractionConfig()])
@@ -84,6 +80,15 @@ def is_answer_equal(pred: str, gt: str, ignore_not_parseable=False) -> bool:
 
     is_correct = verify(answer_parsed, gold_parsed)
     return is_correct
+
+def is_answer_equal(pred: str, gt: str, ignore_not_parseable=False) -> bool:
+    # Extract part after '=' if present
+    pred_after_equals = extract_after_equals(pred)
+    gt_after_equals = extract_after_equals(gt)
+
+    return __is_answer_equal(pred_after_equals, gt_after_equals, ignore_not_parseable) \
+        or __is_answer_equal(pred, gt, ignore_not_parseable)
+
 
 # remove first and last tags <...>
 def remove_tags(text: str) -> str:

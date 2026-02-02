@@ -8,35 +8,16 @@ from datasets import load_dataset
 from peft import PeftModel
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from build_data import add_dataset
-from filter import fix_multiple_choice_answer
-from generate_answers import generate_answers, generate_answers_budget_forcing
+from generate_answers import generate_answers
 
 from config import RESULT_FILE, DEVICE, MODEL_CACHE_PATH, DATA_CACHE_PATH, SFT_CFG
 from utils import extract_boxed, is_answer_equal, make_prompt_template
 
-MODEL_NAME = SFT_CFG["model"]["name"]
-
-# 🧠 Tải model và tokenizer
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
-tokenizer.padding_side = "left"
-# --- Load model ---
-model = AutoModelForCausalLM.from_pretrained(
-    MODEL_NAME,
-    # "sft-cot-model/checkpoint-4550",
-    torch_dtype=torch.float16,  # tiết kiệm VRAM
-    device_map='cuda',
-    # attn_implementation="flash_attention_3",
-    cache_dir=MODEL_CACHE_PATH
-)
-# model = PeftModel.from_pretrained(model, "sft-cot-model")
-model.generation_config.pad_token_id = tokenizer.pad_token_id
-model.eval()
-
 BATCH_SIZE = 20
 
 # 📊 Đánh giá accuracy và lưu chi tiết (kèm output đầy đủ)
-def evaluate_dataset(dataset_name, config_name=None, use_local_data=False, eval_size=0, problem="problem", answer="answer", split="test"):
+def evaluate_dataset(dataset_name, model, tokenizer, config_name=None, use_local_data=False, eval_size=0, problem="problem", answer="answer", split="test"):
+
     if use_local_data:
         dataset = load_dataset("json", data_files=dataset_name)[split]
     else:
@@ -68,8 +49,8 @@ def evaluate_dataset(dataset_name, config_name=None, use_local_data=False, eval_
                 model,
                 tokenizer,
                 batch_questions,
-                max_new_tokens=2000, 
-                enable_thinking=False,
+                max_new_tokens=4000, 
+                # enable_thinking=False,
                 # max_tokens_thinking_tmp=3000
             )
 
@@ -124,6 +105,20 @@ def save_result(model_name, dataset_name, accuracy, avg_tokens_generated):
 
 
 if __name__ == "__main__":
+    MODEL_NAME = SFT_CFG["model"]["name"]
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
+    tokenizer.padding_side = "left"
+    model = AutoModelForCausalLM.from_pretrained(
+        # MODEL_NAME,
+        "sft-cot-model/best_model",
+        torch_dtype=torch.bfloat16,
+        device_map='cuda',
+        cache_dir=MODEL_CACHE_PATH
+    )
+    model.generation_config.pad_token_id = tokenizer.pad_token_id
+    model.eval()
+
     # hendrycks = evaluate_dataset("nlile/hendrycks-MATH-benchmark", split="test", eval_size=30)
     # save_result(MODEL_NAME, "hendrycks_math", hendrycks)
     # aime_acc = evaluate_dataset("HuggingFaceH4/aime_2024", split="train")
@@ -137,14 +132,8 @@ if __name__ == "__main__":
     # gsm8k_acc = evaluate_dataset("openai/gsm8k", config_name="main", problem="question", answer="answer", eval_size=1000)
     # save_result(MODEL_NAME, "GSM8K", *gsm8k_acc)
 
-    gretelai_gsm8k_acc = evaluate_dataset("data/val.json", split="train", use_local_data=True, eval_size=100)
+    gretelai_gsm8k_acc = evaluate_dataset("data/test.json", model, tokenizer, split="train", use_local_data=True)
     save_result(MODEL_NAME, "gretelai-GSM8K", *gretelai_gsm8k_acc)
 
     # vietnam_high_school_acc = evaluate_dataset("data/vietnam_high_school_mathematics.json", split="train", use_local_data=True)
     # save_result(MODEL_NAME, "vietnam_high_school_mathematics", *vietnam_high_school_acc)
-
-
-    print("\n📊 Benchmark Summary")
-    # print(f"AIME24-1 Accuracy: {aime_acc:.2f}%")
-    # print(f"MATH-500 Accuracy: {math_acc:.2f}%")
-    print(f"\n✅ Kết quả đã được lưu vào file: {RESULT_FILE}")
