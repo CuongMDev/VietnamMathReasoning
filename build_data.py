@@ -9,7 +9,7 @@ from transformers import AutoTokenizer
 from datasets import load_dataset
 
 from config import DATA_CACHE_PATH, INSTRUCTION_DATA_PATH, MODEL_CACHE_PATH, SFT_CFG
-from filter import clean_reasoning, is_low_quality, is_good_thinking, is_step_by_step, process_mcq
+from filter import is_low_quality, is_good_thinking, is_step_by_step, process_mcq
 from filter_calculus import has_calculus_keywords
 from utils import extract_boxed, make_prompt_template, remove_all_tags, remove_tags
 
@@ -192,57 +192,57 @@ def add_dataset(
 def build_small_math_reasoning(output_dir="."):
     data = []
 
+    add_dataset(
+        data,
+        path="simplescaling/s1K-1.1",
+        question_key_en="question",
+        answer_key="deepseek_attempt",
+        think_key="deepseek_thinking_trajectory",
+        correct_key="deepseek_grade",
+        max_token=8000,
+        min_token=0,
+        n_samples=2000,
+        streaming=True,
+        # max_think_segment_chars=500,
+    )
+
     # add_dataset(
     #     data,
-    #     path="open-r1/OpenR1-Math-220k",
+    #     path="nvidia/OpenMathReasoning",
     #     question_key_en="problem",
+    #     split="cot",
     #     answer_key="</think>",
-    #     think_key="generations",
-    #     correct_key="correctness_math_verify",
-    #     max_token=7000,
-    #     min_token=2000,
-    #     n_samples=1000,
+    #     think_key="generated_solution",
+    #     max_token=2900,
+    #     min_token=1000,
+    #     # n_samples=10000,
     #     streaming=True,
-    #     # max_think_segment_chars=500,
+    #     # max_candidates=100000,
+    #     # length_sampling=False,
+    #     # max_data_samples=3000000,
+    #     # max_think_segment_chars=400,
+    #     # diversify_key="problem_source",
+    #     # max_per_group=40000
+    #     filter_calculus=True
     # )
 
-    add_dataset(
-        data,
-        path="nvidia/OpenMathReasoning",
-        question_key_en="problem",
-        split="cot",
-        answer_key="</think>",
-        think_key="generated_solution",
-        max_token=2900,
-        min_token=1000,
-        # n_samples=10000,
-        streaming=True,
-        # max_candidates=100000,
-        # length_sampling=False,
-        # max_data_samples=3000000,
-        # max_think_segment_chars=400,
-        # diversify_key="problem_source",
-        # max_per_group=40000
-        filter_calculus=True
-    )
-
-    add_dataset(
-        data,
-        path="ServiceNow-AI/R1-Distill-SFT",
-        question_key_en="problem",
-        answer_key="</think>",
-        subset='v0',
-        think_key="reannotated_assistant_content",
-        max_token=2700,
-        min_token=1000,
-        # n_samples=5000,
-        # max_candidates=10000,
-        # length_sampling=True,
-        # max_think_segment_chars=300,
-        # diversify_key="source", 
-        # max_per_group=2500,
-        filter_calculus=True
-    )
+    # add_dataset(
+    #     data,
+    #     path="ServiceNow-AI/R1-Distill-SFT",
+    #     question_key_en="problem",
+    #     answer_key="</think>",
+    #     subset='v0',
+    #     think_key="reannotated_assistant_content",
+    #     max_token=2700,
+    #     min_token=1000,
+    #     # n_samples=5000,
+    #     # max_candidates=10000,
+    #     # length_sampling=True,
+    #     # max_think_segment_chars=300,
+    #     # diversify_key="source", 
+    #     # max_per_group=2500,
+    #     filter_calculus=True
+    # )
 
     # add_dataset(
     #     data,

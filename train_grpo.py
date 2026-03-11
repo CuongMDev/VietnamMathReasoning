@@ -21,6 +21,8 @@ torch.manual_seed(42)
 
 # --- Load tokenizer ---
 MODEL_NAME = GRPO_CFG["model"]["name"]
+TRAIN_PATH = GRPO_CFG["dataset"]["train_path"]
+
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, cache_dir=MODEL_CACHE_PATH)
 tokenizer.padding_side = 'left'
 
@@ -58,7 +60,7 @@ if LORA_CONFIG["using_lora"]:
     model.print_trainable_parameters()
 
 # --- Load dataset (pre-split by split_data.py) ---
-train_dataset = load_dataset("json", data_files=INSTRUCTION_DATA_PATH + "train.json")["train"]
+train_dataset = load_dataset("json", data_files=INSTRUCTION_DATA_PATH + TRAIN_PATH)["train"]
 
 # --- Combined reward function ---
 REWARD_FUNCS_REGISTRY = {
@@ -83,6 +85,7 @@ REWARD_FUNCS_REGISTRY = {
         max_value_correct=GRPO_CFG["grpo"]["cosine_max_value_correct"],
         max_word=GRPO_CFG["grpo"]["cosine_max_word"],
     ),
+    "formula": formula_count_reward,
     "length": len_reward,
 }
 

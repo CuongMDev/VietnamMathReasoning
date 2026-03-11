@@ -81,7 +81,57 @@ def __is_answer_equal(pred: str, gt: str, ignore_not_parseable=False) -> bool:
     is_correct = verify(answer_parsed, gold_parsed)
     return is_correct
 
-def is_answer_equal(pred: str, gt: str, ignore_not_parseable=False) -> bool:
+def _normalize_choice_letter(s: str) -> str:
+    """Extract choice letter from plain 'A' or LaTeX like \\text{A}."""
+    s = s.strip()
+    m = re.match(r'\\text\{([A-Da-d])\}$', s)
+    if m:
+        return m.group(1).upper()
+    if s.upper() in ("A", "B", "C", "D"):
+        return s.upper()
+    return ""
+
+def _normalize_text_cmd(s: str) -> str:
+    r"""Normalize \text{...} -> lowercase content. e.g. \text{DNE} -> dne"""
+    return re.sub(r'\\text\{([^}]*)\}', lambda m: m.group(1).lower(), s)
+
+def _normalize_dne(s: str) -> str:
+    """Normalize 'does not exist' variants to 'dne'."""
+    if re.match(r'does\s+not\s+exist$', s.strip(), re.IGNORECASE):
+        return "dne"
+    return s
+
+def _extract_choice_value(letter: str, question: str) -> str:
+    """If letter is A/B/C/D, extract the corresponding value from the question's choices."""
+    letter = letter.strip().upper()
+    if letter not in ("A", "B", "C", "D"):
+        return ""
+    # Match patterns like: A. 5, A) 5, A: 5, **A.** 5, $A.$ 5
+    pattern = rf'(?:\*\*|\$)?{letter}[\.\)\:](?:\*\*|\$)?\s*(.+?)(?:\s*(?:(?:\*\*|\$)?[B-D][\.\)\:])|$)'
+    match = re.search(pattern, question, re.DOTALL)
+    if match:
+        return match.group(1).strip().rstrip('.').strip()
+    return ""
+
+def is_answer_equal(question: str, pred: str, gt: str, ignore_not_parseable=False) -> bool:
+    # Normalize \text{...} -> lowercase, then DNE
+    pred = _normalize_text_cmd(pred)
+    gt = _normalize_text_cmd(gt)
+    pred = _normalize_dne(pred)
+    gt = _normalize_dne(gt)
+
+    # Normalize choice letters (A, \text{A})
+    pred_letter = _normalize_choice_letter(pred)
+    if pred_letter:
+        resolved = _extract_choice_value(pred_letter, question)
+        if resolved:
+            pred = resolved
+    gt_letter = _normalize_choice_letter(gt)
+    if gt_letter:
+        resolved = _extract_choice_value(gt_letter, question)
+        if resolved:
+            gt = resolved
+
     # Extract part after '=' if present
     pred_after_equals = extract_after_equals(pred)
     gt_after_equals = extract_after_equals(gt)

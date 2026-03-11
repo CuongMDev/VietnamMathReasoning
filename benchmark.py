@@ -13,7 +13,7 @@ from generate_answers import generate_answers
 from config import RESULT_FILE, DEVICE, MODEL_CACHE_PATH, DATA_CACHE_PATH, SFT_CFG
 from utils import extract_boxed, is_answer_equal, make_prompt_template
 
-BATCH_SIZE = 20
+BATCH_SIZE = 10
 
 # 📊 Đánh giá accuracy và lưu chi tiết (kèm output đầy đủ)
 def evaluate_dataset(dataset_name, model, tokenizer, config_name=None, use_local_data=False, eval_size=0, problem="problem", answer="answer", split="test"):
@@ -68,7 +68,7 @@ def evaluate_dataset(dataset_name, model, tokenizer, config_name=None, use_local
                 raw_output = output.strip()  # ✨ Lưu đầy đủ output
 
                 # So sánh kết quả
-                is_correct = is_answer_equal(pred, gt)
+                is_correct = is_answer_equal(question, pred, gt)
 
                 if is_correct:
                     correct += 1

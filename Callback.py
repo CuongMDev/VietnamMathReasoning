@@ -19,9 +19,10 @@ class AccuracyEvalCallback(TrainerCallback):
         self.max_new_tokens = max_new_tokens
         self.batch_size = batch_size
         self.top_k = top_k
-        self.best_results = []  # list of (accuracy, step, save_dir)
         self.best_accuracy = 0.0
+        self.best_avg_token = float('inf')
         self.best_step = 0
+        self.best_save_dir = None
 
     def on_step_end(self, args, state, control, **kwargs):
         """Generate answers and compute accuracy at eval_steps intervals."""
@@ -38,6 +39,7 @@ class AccuracyEvalCallback(TrainerCallback):
         # Prepare all prompts
         all_prompts = [make_prompt_template(ex["problem"]) for ex in self.val_dataset_raw]
         all_answers = [ex.get("answer", "") for ex in self.val_dataset_raw]
+        all_questions = [ex["problem"] for ex in self.val_dataset_raw]
 
         # Process in batches
         all_pred_answers = []
@@ -60,12 +62,13 @@ class AccuracyEvalCallback(TrainerCallback):
 
             for output, tok_count in zip(batch_outputs, batch_token_counts):
                 pred_answer = extract_boxed(output)
+                
                 all_pred_answers.append(pred_answer)
                 all_token_counts.append(tok_count)
 
         # Calculate accuracy
         for i, (pred_answer, gt_answer) in enumerate(zip(all_pred_answers, all_answers)):
-            if is_answer_equal(pred_answer, gt_answer):
+            if is_answer_equal(all_questions[i], pred_answer, gt_answer):
                 correct += 1
 
         accuracy = correct / total if total > 0 else 0.0
@@ -81,28 +84,24 @@ class AccuracyEvalCallback(TrainerCallback):
             "eval_avg_token_count": avg_token_count,
         })
 
-        # Track top-k best models
-        save_dir = os.path.join(args.output_dir, f"best_model_step_{state.global_step}")
+        # Track best model: highest accuracy, tie-break by lowest avg token
+        is_better = (accuracy > self.best_accuracy) or \
+                    (accuracy == self.best_accuracy and avg_token_count < self.best_avg_token)
 
-        if len(self.best_results) < self.top_k:
+        if is_better:
+            # Remove old best
+            if self.best_save_dir and os.path.exists(self.best_save_dir):
+                shutil.rmtree(self.best_save_dir)
+
+            save_dir = os.path.join(args.output_dir, "best_model")
             self.model.save_pretrained(save_dir)
             self.tokenizer.save_pretrained(save_dir)
-            self.best_results.append((accuracy, state.global_step, save_dir))
-            self.best_results.sort(key=lambda x: x[0])
-            print(f"[Step {state.global_step}] Accuracy: {accuracy:.4f}, saved at: {save_dir}")
-        elif accuracy > self.best_results[0][0]:
-            _, _, worst_dir = self.best_results.pop(0)
-            if os.path.exists(worst_dir):
-                shutil.rmtree(worst_dir)
-            self.model.save_pretrained(save_dir)
-            self.tokenizer.save_pretrained(save_dir)
-            self.best_results.append((accuracy, state.global_step, save_dir))
-            self.best_results.sort(key=lambda x: x[0])
-            print(f"[Step {state.global_step}] New top-{self.top_k} Accuracy: {accuracy:.4f}, saved at: {save_dir}")
 
-        if accuracy > self.best_accuracy:
             self.best_accuracy = accuracy
+            self.best_avg_token = avg_token_count
             self.best_step = state.global_step
+            self.best_save_dir = save_dir
+            print(f"[Step {state.global_step}] New best! Accuracy: {accuracy:.4f}, Avg tokens: {avg_token_count:.2f}, saved at: {save_dir}")
 
 class RewardsEvalCallback(TrainerCallback):
     def __init__(self, metric_name="reward", top_k=3):

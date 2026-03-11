@@ -2,15 +2,15 @@ import random
 from transformers.trainer_pt_utils import LabelSmoother
 IGNORE_TOKEN_ID = LabelSmoother.ignore_index
 
-def mask_step_numbers(tokenizer, prompt_text, input_ids, labels, ignore_id=IGNORE_TOKEN_ID):
-    step_token_ids = tokenizer("### Step ", add_special_tokens=False)["input_ids"]
+def mask_step_numbers(tokenizer, prompt_text, input_ids, labels, step_pref = "### Step ", ignore_id=IGNORE_TOKEN_ID):
+    step_token_ids = tokenizer(step_pref, add_special_tokens=False)["input_ids"]
     positions = []  # lưu danh sách (start_pos, length)
 
     search_text_pos = 0
     search_input_pos = 0
 
     while True:
-        idx = prompt_text.find("### Step ", search_text_pos)
+        idx = prompt_text.find(step_pref, search_text_pos)
         if idx == -1:
             break
 

@@ -14,7 +14,7 @@ def accuracy_reward(completions, solution, **kwargs):
     rewards = []
     for content, sol in zip(contents, solution):
         pred = extract_boxed(content)
-        reward = float(is_answer_equal(pred, sol, ignore_not_parseable=True))
+        reward = float(is_answer_equal(content, pred, sol, ignore_not_parseable=True))
         rewards.append(reward)
 
     return rewards
@@ -146,7 +146,7 @@ def len_reward(completions: list[Dict[str, str]], solution: list[str], **kwargs)
     correctness = []
     for content, sol in zip(contents, solution):
         pred = extract_boxed(content)
-        reward = float(is_answer_equal(pred, sol, ignore_not_parseable=True))
+        reward = float(is_answer_equal(content, pred, sol, ignore_not_parseable=True))
         correctness.append(reward)
 
     # Calculate lengths
@@ -201,7 +201,7 @@ def get_cosine_scaled_reward(
 
         for content, sol in zip(contents, solution):
             pred = extract_boxed(content)
-            is_correct = is_answer_equal(pred, sol, ignore_not_parseable=True)
+            is_correct = is_answer_equal(content, pred, sol, ignore_not_parseable=True)
             gen_len = len(content)
 
             # Apply cosine scaling based on length
@@ -253,7 +253,7 @@ def get_cosine_backtracking_scaled_reward(
 
         for content, sol in zip(contents, solution):
             pred = extract_boxed(content)
-            is_correct = is_answer_equal(pred, sol, ignore_not_parseable=True)
+            is_correct = is_answer_equal(content, pred, sol, ignore_not_parseable=True)
             gen_word = count_thinking_words(content)[1]
 
             # Apply cosine scaling based on length
@@ -324,49 +324,20 @@ def get_repetition_penalty_reward(ngram_size: int, max_penalty: float):
 
     return repetition_penalty_reward
 
-def logprob_confidence_reward(completions, **kwargs):
-    """
-    Reward based on average token log-probability (model confidence).
 
-    Maps mean logprob from [-5, 0] -> [0, 1].
-
-    Higher confidence => higher reward.
-    """
-
+def formula_count_reward(completions, **kwargs):
+    """Reward 1.0 if at least one formula is cited in <think>, else 0.0."""
+    contents = [completion[0]["content"] for completion in completions]
     rewards = []
 
-    for comp in completions:
-
-        # Handle TRL formats: [ {..} ] or {..}
-        if isinstance(comp, list):
-            c = comp[0]
-        elif isinstance(comp, dict):
-            c = comp
+    for content in contents:
+        think_match = re.search(r"<think>\n?(.*?)\n\n", content, re.DOTALL)
+        if think_match:
+            header = think_match.group(1)
+            has_formula = bool(re.search(r"^- formula \d+:", header, re.MULTILINE))
         else:
-            rewards.append(0.0)
-            continue
+            has_formula = False
 
-        logps = c.get("logprobs", None)
-
-        if logps is None or len(logps) == 0:
-            rewards.append(0.0)
-            continue
-
-        if not isinstance(logps, torch.Tensor):
-            logps = torch.tensor(logps)
-
-        # Important: detach from graph
-        logps = logps.detach()
-
-        # Mean token log-prob
-        avg_logp = logps.mean()
-
-        # Clamp for numerical stability
-        avg_logp = torch.clamp(avg_logp, -5.0, 0.0)
-
-        # Normalize [-5, 0] -> [0, 1]
-        reward = (avg_logp + 5.0) / 5.0
-
-        rewards.append(float(reward))
+        rewards.append(1.0 if has_formula else 0.0)
 
     return rewards
