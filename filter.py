@@ -3,6 +3,11 @@ import re
 
 def is_low_quality(text: str) -> bool:
     """Kiểm tra xem câu hỏi có lỗi định dạng (low quality) không."""
+    # Không có \boxed{} sau </think> -> low quality
+    after_think = text.split("</think>")[-1] if "</think>" in text else text
+    if not re.search(r'\\boxed\s*\{', after_think):
+        return True
+
     patterns = [
         r"```",               # chứa code block chưa đóng
         r"===+|---+",         # ASCII art kiểu gạch dài
